@@ -1,6 +1,8 @@
-package go_excelize
+package excelize
 
-import "github.com/xuri/excelize/v2"
+import (
+	"context"
+)
 
 const defaultSheetName = "Sheet1"
 
@@ -15,23 +17,31 @@ type WithMultipleSheets interface {
 }
 
 type WithCollection interface {
-	Collection() error
+	Collection(ctx context.Context) error
 }
 
 type FromCollection interface {
 	Rows() [][]interface{}
 }
 
-type WithTitle interface {
-	Title() string
+type WithSheetName interface {
+	SheetName() string
+}
+
+type WithSkip interface {
+	Skip(sheetName string) int
 }
 
 type WithHeading interface {
 	Headers() []interface{}
 }
 
+type WithRows interface {
+	SheetRows() interface{}
+}
+
 type WithStyles interface {
-	Style() map[string]*excelize.Style
+	Style() map[string]Style
 }
 
 type WithColumnWidths interface {

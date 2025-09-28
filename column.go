@@ -1,4 +1,4 @@
-package go_excelize
+package excelize
 
 import (
 	"errors"

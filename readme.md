@@ -62,14 +62,14 @@ if err != nil {
 
 #### 定义sheet名称，默认名称为 Sheet1
 ```go
-func (e export) Title() string {
+func (e export) SheetName() string {
 	return "custom-sheet-name"
 }
 ```
 
 #### 定义表头行
 ```go
-func (e export) Header() []string {
+func (e export) Headers() []interface{} {
     return []string{"ID", "Name", "Age"}
 }
 ```

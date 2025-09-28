@@ -1,4 +1,4 @@
-package go_excelize
+package excelize
 
 import (
 	"github.com/xuri/excelize/v2"
@@ -7,6 +7,7 @@ import (
 
 type reader struct {
 	file *excelize.File
+	skip int
 }
 
 func newReaderOfPath(path string) reader {
@@ -27,8 +28,17 @@ func newReader(file multipart.File) reader {
 	return reader{file: f}
 }
 
+func (r reader) withSkip(num int) {
+	r.skip = num
+}
+
 func (r reader) GetRows(name string) ([][]string, error) {
-	return r.file.GetRows(name)
+	rows, err := r.file.GetRows(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return rows[r.skip:], nil
 }
 
 func (r reader) GetHeader(name string) (row []string, err error) {
@@ -43,7 +53,14 @@ func (r reader) GetHeader(name string) (row []string, err error) {
 		}
 	}()
 
+	// Skip the first `r.skip` rows
+	var i int
 	for rows.Next() {
+		if i < r.skip {
+			i++
+			continue
+		}
+
 		row, err = rows.Columns()
 		return
 	}

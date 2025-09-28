@@ -1,4 +1,4 @@
-package go_excelize
+package excelize
 
 import (
 	"errors"
@@ -25,6 +25,11 @@ func (s *scanner) scan(rows Rows) error {
 }
 
 func (s *scanner) value(rv reflect.Value) error {
+	//if rv.Kind() == reflect.Struct {
+	//	newSlice := reflect.MakeSlice(reflect.SliceOf(rv.Type()), 100, 100)
+	//	return s.value(newSlice)
+	//}
+
 	if rv.Kind() != reflect.Slice {
 		return &InvalidUnmarshalError{rv.Type()}
 	}
@@ -54,14 +59,17 @@ func (s *scanner) value(rv reflect.Value) error {
 	return nil
 }
 
-func (s *scanner) fill(headers, rows []string, rv reflect.Value) error {
+func (s *scanner) fill(headers, row []string, rv reflect.Value) error {
 	switch rv.Kind() {
 	default:
-		return errors.New("unhandled default case")
+		return errors.New("scanner fill=====unhandled default case")
 
 	case reflect.Map:
 		c := reflect.MakeMap(rv.Type())
-		for j, k := range rows {
+		for j, k := range row {
+			if j >= len(headers) {
+				continue
+			}
 			c.SetMapIndex(reflect.ValueOf(headers[j]), reflect.ValueOf(k))
 		}
 		rv.Set(c)
@@ -76,8 +84,8 @@ func (s *scanner) fill(headers, rows []string, rv reflect.Value) error {
 			var val string
 			for i, h := range headers {
 				if h == fs.alias {
-					if i < len(rows) {
-						val = rows[i]
+					if i < len(row) {
+						val = row[i]
 					}
 					break
 				}
@@ -113,8 +121,15 @@ func (s *scanner) filterRule(f field, rv reflect.Value, val string) error {
 
 	if f.relation != nil {
 		if s.child == nil {
+			var fType = f.typ
 			s2 := &scanner{reader: s.reader, sheet: f.relation.sheetName}
-			s.child = reflect.New(f.typ).Interface()
+			if fType.Kind() == reflect.Pointer {
+				fType = fType.Elem()
+			}
+			if fType.Kind() != reflect.Slice {
+				fType = reflect.SliceOf(fType)
+			}
+			s.child = reflect.New(fType).Interface()
 			err := s2.scan(s.child)
 			if err != nil {
 				return err
@@ -123,13 +138,22 @@ func (s *scanner) filterRule(f field, rv reflect.Value, val string) error {
 		crv := reflect.ValueOf(s.child).Elem()
 		reference := rv.FieldByName(f.relation.references)
 		if crv.Kind() == reflect.Slice {
-			var re = reflect.MakeSlice(f.typ, 0, 0)
-			for i := 0; i < crv.Len(); i++ {
-				if crv.Index(i).FieldByName(f.relation.foreign).String() == reference.String() {
-					re = reflect.Append(re, crv.Index(i))
+			if v.Kind() == reflect.Slice {
+				var re = reflect.MakeSlice(f.typ, 0, 0)
+				for i := 0; i < crv.Len(); i++ {
+					if crv.Index(i).FieldByName(f.relation.foreign).String() == reference.String() {
+						re = reflect.Append(re, crv.Index(i))
+					}
+				}
+				v.Set(re)
+			} else {
+				for i := 0; i < crv.Len(); i++ {
+					if crv.Index(i).FieldByName(f.relation.foreign).String() == reference.String() {
+						v.Set(crv.Index(i).Addr())
+					}
 				}
 			}
-			v.Set(re)
+
 			return nil
 		} else {
 			if crv.FieldByName(f.relation.foreign).String() == reference.String() {
