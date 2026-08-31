@@ -1,0 +1,47 @@
+schema_version: 1
+
+# Project-level configuration. Workflow state belongs in task.yaml.
+project:
+  name: "go-excelize"
+  created_at: "2026-08-31"
+  category:
+    primary: library_or_other
+    confidence: 0.9
+    ambiguous: false
+    evidence:
+      - path: "go.mod"
+        rule: "application_stack"
+        summary: "Go module marker detected (github.com/starme/go-excelize); installed via go get, no main entry, no cmd/ directory."
+        weight: 6
+        category: library_or_other
+      - path: "*.go"
+        rule: "library_api_surface"
+        summary: "Package exposes library API only (Importer/Exporter/Reader/Scanner with xlsx struct tags); no HTTP server, no frontend. Analyzer suggested traditional_application on go.mod alone; user confirmed library_or_other on 2026-08-31."
+        weight: 4
+        category: library_or_other
+  capabilities:
+    - backend
+
+workspace:
+  root: "/Users/tal/projects/go/packages/go-excelize"
+  backend:
+    path: "."
+    stack: "Go 1.23.3 library (wraps github.com/xuri/excelize/v2)"
+  frontend:
+    path: null
+    stack: null
+  contract_path: ".devflow/contracts"
+  docs_path: "docs"
+  rules_path: ".devflow/rules"
+
+platforms:
+  supported: [claude-code]
+  default: "claude-code"
+
+safety:
+  redlines_path: ".devflow/redlines.yaml"
+  test_file_protection: true
+
+memorant:
+  enabled: auto
+  project_key: "go-excelize"
