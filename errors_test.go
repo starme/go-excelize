@@ -2,10 +2,86 @@ package excelize
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
 )
+
+// newTestReader 构造一个含两个 sheet（"SheetA" 为首 sheet、"SheetB"）的临时 reader。
+func newTestReader(t *testing.T) *reader {
+	t.Helper()
+	f := excelize.NewFile()
+	if err := f.SetSheetName("Sheet1", "SheetA"); err != nil {
+		t.Fatalf("rename default sheet: %v", err)
+	}
+	if _, err := f.NewSheet("SheetB"); err != nil {
+		t.Fatalf("create SheetB: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "resolve.xlsx")
+	if err := f.SaveAs(path); err != nil {
+		t.Fatalf("save xlsx: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close xlsx: %v", err)
+	}
+	r, err := newReaderOfPath(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	return r
+}
+
+func TestResolveSheetName_ExplicitMissingSheet(t *testing.T) {
+	r := newTestReader(t)
+	defer r.close()
+
+	_, err := r.resolveSheetName("userSheet", true)
+	if err == nil {
+		t.Fatalf("expected error for explicit missing sheet, got nil")
+	}
+	var sheetErr excelize.ErrSheetNotExist
+	if !errors.As(err, &sheetErr) {
+		t.Fatalf("expected excelize.ErrSheetNotExist, got %T: %v", err, err)
+	}
+	if sheetErr.SheetName != "userSheet" {
+		t.Fatalf("expected SheetName %q, got %q", "userSheet", sheetErr.SheetName)
+	}
+}
+
+func TestResolveSheetName_DefaultFallback(t *testing.T) {
+	r := newTestReader(t)
+	defer r.close()
+
+	got, err := r.resolveSheetName(defaultSheetName, false)
+	if err != nil {
+		t.Fatalf("default name should fall back, got err: %v", err)
+	}
+	if got != "SheetA" {
+		t.Fatalf("expected fallback to first sheet SheetA, got %q", got)
+	}
+
+	got, err = r.resolveSheetName("", false)
+	if err != nil {
+		t.Fatalf("empty name should fall back, got err: %v", err)
+	}
+	if got != "SheetA" {
+		t.Fatalf("expected fallback to first sheet SheetA, got %q", got)
+	}
+}
+
+func TestResolveSheetName_ExplicitExistingSheet(t *testing.T) {
+	r := newTestReader(t)
+	defer r.close()
+
+	got, err := r.resolveSheetName("SheetB", true)
+	if err != nil {
+		t.Fatalf("explicit existing sheet should resolve, got err: %v", err)
+	}
+	if got != "SheetB" {
+		t.Fatalf("expected SheetB, got %q", got)
+	}
+}
 
 func TestIsLengthError_True(t *testing.T) {
 	err := newValidateHeaderError("t", newHeaderLengthError(3, 5))
