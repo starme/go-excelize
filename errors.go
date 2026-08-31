@@ -58,7 +58,7 @@ func (h HeaderLengthError) Error() string {
 }
 
 func newHeaderLengthError(expected, actual int) error {
-	return &HeaderLengthError{expected: expected, actual: actual}
+	return HeaderLengthError{expected: expected, actual: actual}
 }
 
 // HeaderMismatchError is used when the header of the sheet does not match the expected header.
