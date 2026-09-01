@@ -134,6 +134,41 @@ func (i import) Collection() error {
 }
 ```
 
+#### 流式导入（ImportStream）
+
+`ImportStream` 提供逐行流式消费的导入入口，避免把整张表一次性加载进内存（峰值内存从 O(行数) 降到 O(字段数)）。它返回 `iter.Seq2[interface{}, error]`，逐行 yield 解析后的 struct 指针；`err` 非 nil 表示整体错误并终止迭代。
+
+```go
+import "iter"
+
+type MyRow struct {
+	Code string   `xlsx:"name:字段编码"`
+	Name []string `xlsx:"name:所属维度;split:|"`
+}
+
+importer, err := NewImporterAsPath(context.Background(), "./data.xlsx")
+if err != nil {
+    return err
+}
+
+var rows []MyRow
+for row, rerr := range importer.ImportStream(&rows) {
+    if rerr != nil {
+        return rerr // 整体错误（表头校验 / sheet 不存在 / 行解析失败），立即停止
+    }
+    r := row.(*MyRow) // yield 的是 *T（struct 指针），需类型断言
+    fmt.Println(r.Code)
+}
+```
+
+要点：
+
+- **yield 的是 `*T`**：`ImportStream` 入参与 `Import` 相同（`*[]T`），逐行 yield 的 `row` 是 `interface{}` 包装的 `*T`，调用方需 `row.(*MyRow)` 断言。
+- **提前 `break` 自动释放资源**：`for ... range` 中提前 `break`/`return` 时，底层 `file.Rows()` 与文件句柄由生成器内部 `defer` 确定性关闭，无句柄泄漏（无需手动 `Close`，也无需等待 GC）。
+- **仅支持单 sheet**：接到 `WithMultipleSheets` 时返回整体错误（`ImportStream supports a single sheet only; use Import for multiple sheets`），多 sheet 全量导入请用 `Import`。
+- **不触发 `Collection`**：`Collection` 是全量导入的收尾钩子，流式逐行消费没有"整批完成"语义，故不触发。需要导入后统一后处理请用全量 `Import`。
+- **`relation` 字段照常解析**：主表逐行流式，relation 指向的子表在首次遇到该字段时载入内存并缓存（与全量 `Import` 一致）。若子表意外巨大，流式收益收敛为"主表线性项消除"，峰值 ≈ 子表大小 + 单行。
+
 #### Multiple sheets, 多sheet页
 ```go
 func (e export) Sheets() map[string]Sheet {

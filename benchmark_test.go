@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
@@ -71,6 +72,41 @@ func BenchmarkImport(b *testing.B) {
 					b.Fatalf("import: %v", err)
 				}
 			}
+		})
+	}
+}
+
+// BenchmarkImportStream 流式导入基准：逐行消费并丢弃，度量驻留峰值而非累计分配。
+// 峰值口径为 runtime.ReadMemStats().HeapAlloc（不用 B/op——B/op 只累计不过滤回收，
+// 流式下失真），与 BenchmarkImport 的 ~1.55GB 峰值形成 AC-4 对比基线。
+func BenchmarkImportStream(b *testing.B) {
+	for _, rows := range []int{1e2, 1e4, 1e5} {
+		b.Run(fmt.Sprintf("%dRows", rows), func(b *testing.B) {
+			path := benBuildXlsx(b, rows)
+			b.ResetTimer()
+
+			var peakAlloc uint64
+			for i := 0; i < b.N; i++ {
+				var e []TextColumnRow
+				imp, err := NewImporterAsPath(context.Background(), path)
+				if err != nil {
+					b.Fatalf("new importer: %v", err)
+				}
+				for row, rerr := range imp.ImportStream(&e) {
+					if rerr != nil {
+						b.Fatalf("import stream: %v", rerr)
+					}
+					_ = row.(*TextColumnRow)
+
+					var m runtime.MemStats
+					runtime.ReadMemStats(&m)
+					if m.HeapAlloc > peakAlloc {
+						peakAlloc = m.HeapAlloc
+					}
+				}
+			}
+
+			b.ReportMetric(float64(peakAlloc)/(1024*1024), "peakMB")
 		})
 	}
 }
