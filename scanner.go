@@ -204,17 +204,17 @@ func (fm *FieldMapper) applyFieldRule(f field, structValue reflect.Value, cellVa
 
 // RelationResolver 专门处理字段关系映射
 type RelationResolver struct {
-	reader     *reader
+	reader      *reader
 	fieldMapper *FieldMapper
-	cache      map[string]Rows // 缓存已加载的子表数据
+	cache       map[string]Rows // 缓存已加载的子表数据
 }
 
 // NewRelationResolver 创建关系解析器
 func NewRelationResolver(r *reader, fm *FieldMapper) *RelationResolver {
 	return &RelationResolver{
-		reader:     r,
+		reader:      r,
 		fieldMapper: fm,
-		cache:      make(map[string]Rows),
+		cache:       make(map[string]Rows),
 	}
 }
 
@@ -395,4 +395,3 @@ func (s *scanner) scanSlice(rv reflect.Value) error {
 
 	return nil
 }
-

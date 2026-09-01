@@ -1,18 +1,18 @@
 schema_version: 1
 
 task:
-  id: "go-excelize-optimization-implementation-6a1e7b"
-  slug: "go-excelize-optimization-implementation"
+  id: "go-excelize-p2-export-ergonomics-and-gof-7cfc39"
+  slug: "go-excelize-p2-export-ergonomics-and-gof"
   kind: "feature"
-  description: "继续按照分析报告剩余的实施建议进行实施（docs/optimization-analysis.md 剩余 12 条：P0-4 性能缓存 + P1×5 代码质量 + P2×4 优雅性，具体范围待 PRODUCT_QA 澄清）"
+  description: "继续 P2 优雅性实施（P2-1 NewExporterWithOptions + P2-2 NewSheet helper，依据 docs/optimization-analysis.md）+ 附带清理 scanner.go 预存在 gofmt 债；P2-3/P2-4 偏 v2 本轮排除"
   current_phase: "done"
   status: "active"
 
 git:
   base_ref: "main"
-  base_commit: "c35b0dc931cb92d902c19d740341dd8dd156b99d"
-  branch: "feature/go-excelize-optimization-implementation-6a1e7b"
-  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-implementation-6a1e7b"
+  base_commit: "f033ed0374babe19792400ea05b8bc5e22a625f3"
+  branch: "feature/go-excelize-p2-export-ergonomics-and-gof-7cfc39"
+  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39"
 
 parent_task_id: null
 source_task_id: null
@@ -25,7 +25,7 @@ workflow:
     - backend
 
 artifacts:
-  prd: "docs/prd-optimization-implementation.md"
+  prd: "docs/prd-p2-export-ergonomics.md"
   architecture: null
   scope: ".devflow/scope.yaml"
   test_reports:

@@ -1,7 +1,7 @@
 # .devflow/scope.yaml
-# 第二轮优化实施 feature：P0-4 字段元数据缓存 + P1×5 代码质量清理
-# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属上一轮 bugfix task，已整体替换）
-# 技术方案见 docs/architecture-optimization-implementation.md
+# 第三轮实施 feature：P2 优雅性（P2-1 导出 Options + P2-2 NewSheet）+ gofmt 债清理
+# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属上一轮 P0-4+P1×5，已整体替换）
+# 技术方案见 docs/architecture-p2-export-ergonomics.md
 
 work_type: feature
 tracks:
@@ -10,199 +10,219 @@ tracks:
 affected:
   backend:
     files:
-      - path: scanner.go
-        reason: "P0-4 落点：fillStruct(117) parse→parseCached、内层 header 线性查找(125-131)改 header→index 映射；包级 sync.Map 字段缓存"
-      - path: importer.go
-        reason: "P1-2 落点：Import/ImportConcurrent default 分支与 sheet 名解析抽 importSingle/sheetNameFor；P1-1 波及点：Import/ImportConcurrent 的 defer Close 合并 closeErr"
-      - path: reader.go
-        reason: "P1-1 落点：close(89-94) 改返回 error，与 GetHeader 标准 closeErr 合并模式对齐"
-      - path: errors.go
-        reason: "P1-3 落点：ExcelLineError/LinesError 加 Deprecated 标注；删 Line 字段+注释代码；InvalidUnmarshalError.Error 前缀修正"
-      - path: column.go
-        reason: "P1-4 落点：删 field.encoding 死字段(24)与 parse 注释掉的旧 map 实现(49-51/63)"
       - path: exporter.go
-        reason: "P1-5 波及点：setColWidth(82-85) sqref 展开改用 expandSqref helper"
+        reason: "P2-1 落点：Exporter 加 config *exportConfig 字段；NewExporter 初始化空 config；createSheet(49-77) 三处改 sheet 级优先/导出级兜底；新增三 setXxxByMap 直取函数"
+      - path: excel.go
+        reason: "P2-1 落点：新增 ExportOption/exportConfig 类型 + NewExporterWithOptions/WithStyle/WithDataValidation/WithColumnWidths 导出符号（不改任何既有接口方法集）"
+      - path: style.go
+        reason: "承载 config.styles map[string]Style 的 Style 类型来源（复用，不改 Style 定义）；如需在此落 ExportOption 亦可，与 excel.go 二选一"
       - path: dataValidate.go
-        reason: "P1-5 落点：FormatDataValidate(85-89) 抽出 expandSqref，两处共用"
+        reason: "承载 config.dataValidate map[string]DataValidate（复用，不改 DataValidate 定义）；如需在此落 Option 亦可"
+      - path: scanner.go
+        reason: "gofmt 债清理（T3）：唯一目的，纯空白/对齐/尾空行，语义零变化"
       - path: readme.md
-        reason: "可选：若 P1-3 修正错误前缀/删除死字段影响到 readme 使用方法说明，则同步（PRD §5 第 18 条 P2）"
+        reason: "C6 文档化：新增 NewExporterWithOptions 三 Option + NewSheet 单/多 sheet 用法；连带修正 readme.md:101/114 既有返回类型漂移（map[string]*excelize.Style→map[string]Style、*DataValidation→DataValidate），修正后逻辑等价"
     new_files:
-      - path: scanner_test.go
-        reason: "P0-4 新增：缓存隔离（不同类型不串扰）+ 缓存透明（同类型重复导入一致）+ 并发正确性（-race）测试。注意：scanner_test.go 已存在，为『增补新测试函数』，不得改既有函数"
+      - path: exporter_options_test.go
+        reason: "P2-1 新增测试：Option 生效（C1 行为级读回）+ R3 覆盖语义（sheet 级覆盖导出级，样式/列宽/验证三维度）"
+      - path: newsheet_test.go
+        reason: "P2-2 新增测试：C2a 单 sheet / C2b 多 sheet / C2c 空 headers/rows 边界三组合"
 
-contract_changes: false     # 零导出 API 变化、xlsx: 标签冻结，唯一例外 InvalidUnmarshalError 错误文本（PRD §4.2 豁免）
+contract_changes: false     # 纯增量：零既有导出符号改动；允许新增导出符号（本轮任务本身）
 contract_files: []
-risk_level: medium           # P0-4 缓存动导入热路径，需并发正确性测试兜底；P1×5 纯重构有 17 测试安全网
-parallelizable: false        # P0-4 与 P1-2 都动 scanner/importer，P0-4 与 P1-4 都动 column.go field 结构体，串行
+risk_level: low             # 纯增量 + config 兜底不改 setXxx 逐 entry 逻辑；gofmt 纯空白；22 测试安全网
+parallelizable: false       # p2-1 先行（C1 需承载物），p2-2 复用 p2-1 Option 做多维度断言，readme 依赖两 API 定型，串行
 
 dependency_order:
   - backend
 
 tasks:
   # ─────────────────────────────────────────────────────────────
-  # M1 行为锁定（所有后续任务的前置）：先确认 17 测试绿 + 落 benchmark before
+  # T1 P2-1 导出级 Option + R3 覆盖语义
   # ─────────────────────────────────────────────────────────────
-  - id: opt-m1-baseline-lock
-    title: "M1 行为锁定：17 测试全绿确认 + benchmark before 数据落盘"
+  - id: p2-1-options
+    title: "P2-1 导出级 ExportOption（WithStyle/WithDataValidation/WithColumnWidths）+ NewExporterWithOptions + R3 覆盖语义"
     track: backend
     description: >
-      跑 go test ./... 确认现有 17 个测试全绿作为重构安全网基线；跑 benchmark
-      记录 before 三项（FillStruct / Import / 其余回退约束项）数据，供 M4 对比。
-      不改任何源码，纯验证与记录。
+      按架构文档 §2/§3 实现：exportConfig{styles,dataValidate,columnWidths}
+      + ExportOption func(*exportConfig) + 三 WithXxx 构造函数 + NewExporterWithOptions；
+      Exporter 加 config 字段，NewExporter 初始化空 config（返回类型不变）；
+      createSheet(49-77) 三处改 sheet 级优先/导出级兜底（覆盖语义），新增 setStyleByMap/
+      setColWidthByMap/setDataValidationByMap 直取函数，复用与 setXxx 逐 entry 完全相同的逻辑
+      （FormatStyle/expandSqref/FormatDataValidate），不改 setXxx 三函数原样。TDD：C1 行为测试
+      （三 Option 生效，读回 xlsx）+ R3 覆盖测试先行（编译失败=红），实现后绿。
     must_read:
-      - docs/architecture-optimization-implementation.md
-      - docs/prd-optimization-implementation.md
-      - benchmark_test.go
+      - docs/architecture-p2-export-ergonomics.md   # §2 Option 承载 + §3 R3 覆盖语义 + §3.3 合成点
+      - docs/prd-p2-export-ergonomics.md            # §3.1 期望签名 + C1 验收
+      - exporter.go                                 # createSheet(49-77)/setStyle(91)/setColWidth(79)/setDataValidation(106)
+      - excel.go                                    # WithStyles(43)/WithColumnWidths(47)/WithDataValidation(51) 真实签名
+      - style.go / dataValidate.go                  # Style/DataValidate 值类型 + FormatStyle/FormatDataValidate/expandSqref
     pattern_ref:
-      - "go test ./..."                    # 17 测试绿基线
-      - "go test ./... -race"              # 现有测试 -race 基线
-      - "go vet ./..."                     # vet 干净基线
-      - "go test -run '^$' -bench 'Benchmark(FillStruct|Import|ImportConcurrent|ScanSlice|Relation)$' -benchtime=1s -count=3 -benchmem ./..."
+      - "type ExportOption func(*exportConfig)；exportConfig 承载三 map，零值=未注入"
+      - "NewExporterWithOptions 先 NewExporter(path) 再逐个 opt(ex.config)；后传覆盖先传"
+      - "createSheet：if s.(WithStyles) ... else if config.styles!=nil setStyleByMap；列宽/验证同理"
+      - "setStyleByMap 遍历 map，复用 style.FormatStyle()+NewStyle+SetColStyle（与 setStyle 逐 entry 一致）"
+      - "读回断言：excelize.OpenFile→GetColWidth/GetCellStyle+GetStyle/GetDataValidations 验证真实生效"
     gotcha:
-      - "baseline 数据须标注 Go 版本 go1.26.4（本机）vs go.mod 1.23.3；M4 after 同版本采集"
-      - "夹具在 b.ResetTimer() 前（现有 benchmark_test.go 已满足，勿改动）"
-      - "只记录不修改，任何测试失败都先回报，不进入后续 task"
+      - "Exporter.config 是 *exportConfig 且 NewExporter 必须初始化（否则 nil 指针）；Export/Close 签名零变化"
+      - "三 setXxx 原函数逐字不动，新增 xxxByMap 直取，避免改既有路径引入回归"
+      - "Style/DataValidate 是值类型（map[string]Style/map[string]DataValidate），不要写 *Style/*DataValidate"
+      - "R3 覆盖：sheet 级优先、导出级兜底，二选一无歧义，禁止合并叠加"
+      - "现有 22 测试零改动，只新增 exporter_options_test.go 新函数"
     tests:
-      - "go test ./...（须 17 全绿）"
-      - "go vet ./...（须干净）"
-    validate:
-      - go test ./...
-      - go vet ./...
-
-  # ─────────────────────────────────────────────────────────────
-  # M2 P0-4 缓存实现（TDD：并发正确性测试先行，红 → 实现 → 绿）
-  # ─────────────────────────────────────────────────────────────
-  - id: opt-p0-4-field-cache
-    title: "P0-4 字段元数据缓存 + header→index 索引 + 并发安全"
-    track: backend
-    description: >
-      按 reflect.Type 包级缓存 parse 结果（[]field，sync.Map），消除每行重复 parse 反射；
-      scanSlice 层构建 header→index 映射（map[string]int，首个写定保留『第一个匹配』语义），
-      内层线性查找改 O(1)。TDD：先写并发正确性测试（-race）确认失败，再实现。
-      缓存生命周期见架构文档 §2.1（字段缓存全局 / header 索引 per-sheet）。缓存值结构 §2.2
-      （[]field 直存，复用原 parse 而非另写 parseType，§2.4 第 4 条）。
-    must_read:
-      - docs/architecture-optimization-implementation.md      # §2 缓存架构 + §2.5 门槛
-      - scanner.go                                            # fillStruct(117)/scanSlice(360) 现有逻辑
-      - column.go                                             # parse(37)/field(20) 解析规则
-      - importer.go                                           # ImportConcurrent(85) 并发路径
-    pattern_ref:
-      - "包级 var fieldCache sync.Map；LoadOrStore 首次写、Load 后续读"
-      - "parseCached(t reflect.Type) 构造 reflect.New(t).Elem() 复用原 parse(v)"
-      - "scanSlice 构建 headerIdx := map[string]int，首个写定保留 break 语义"
-      - "并发测试用 goroutine + sync.WaitGroup 对同一 fieldCache 并发 FillStruct，-race 跑"
-    gotcha:
-      - "缓存必须包级，禁放 FieldMapper 实例字段（newScanner 每 sheet 新建实例，缓存会失效）——架构 §1.4"
-      - "header→index 首个写定，避免 map 后写覆盖破坏原『第一个匹配』语义——架构 §2.4 第 3 条"
-      - "复用原 parse 而非另写 parseType，避免双实现语义漂移——架构 §2.4 第 4 条"
-      - "不改 applyFieldRule 的 FieldByName 反射（本轮范围仅 parse + header 查找）"
-    tests:
-      - "新增并发正确性测试（多 goroutine 共用 fieldCache，-race 通过）——PRD §5 第 4 条"
-      - "新增缓存隔离测试（SelectColumnRow vs TextColumnRow 互不串扰）——§5 第 5 条"
-      - "新增缓存透明测试（同类型多次导入结果一致）——§5 第 6 条"
-      - "现有 17 测试继续全绿（含 -race）"
+      - "C1：三 Option 注入后读回断言样式 NumFmt/列宽/数据验证 sqref 生效"
+      - "R3覆盖：实现 WithStyles 的 sheet 覆盖导出级 WithStyle（样式/列宽/验证三维度各一条）"
+      - "现有 22 测试全过"
     validate:
       - go test ./...
       - go test ./... -race
       - go vet ./...
+      - gofmt -l .
 
   # ─────────────────────────────────────────────────────────────
-  # M3 P1×5 代码质量清理（纯重构，17 测试为安全网）
+  # T2 P2-2 NewSheet helper
   # ─────────────────────────────────────────────────────────────
-  - id: opt-p1-code-quality
-    title: "P1-1~P1-5 代码质量清理（吞错修正/重复抽取/死类型标注/死字段删除/sqref 抽取）"
+  - id: p2-2-newsheet
+    title: "P2-2 NewSheet(headers, rows) helper（simpleSheet 值类型实现 Headers/Rows）"
     track: backend
     description: >
-      P1-1 reader.close 改返回 error，Import/ImportConcurrent 合并 closeErr（路径 B，架构 §3.1）；
-      P1-2 抽 importSingle/sheetNameFor（架构 §3.2，闭包捕获注意）；
-      P1-3 ExcelLineError/LinesError 加 Deprecated 标注 + 删 Line 字段/注释代码 + InvalidUnmarshalError 前缀修正（架构 §3.3）；
-      P1-4 删 field.encoding 与注释代码；P1-5 抽 expandSqref。全部以现有 17 测试为安全网。
+      按架构文档 §4 实现：新文件（建议 new_sheet.go）定义 simpleSheet{headers,rows}
+      + Headers() []interface{} + Rows() [][]interface{} + NewSheet(...) Sheet。
+      simpleSheet 不实现任何 WithXxx/WithSheetName/WithMultipleSheets（纯数据，样式/列宽/验证
+      仅能由 T1 的导出级 Option 注入）。TDD：C2a 单 sheet / C2b 多 sheet（复用 p2-1 Option 注入
+      验证三配置）/ C2c 空 headers/rows 边界三组合（nil headers、nil rows、nil+nil），
+      编译失败=红，实现后绿。
     must_read:
-      - docs/architecture-optimization-implementation.md      # §3 P1×5 实现要点
-      - reader.go                                             # close(89) 与 GetHeader closeErr 模式(68-72)
-      - importer.go                                           # Import(41)/ImportConcurrent(85) 重复分支
-      - errors.go                                             # ExcelLineError(105)/LinesError(115)/InvalidUnmarshalError(12)
-      - column.go                                             # field.encoding(24)/注释块(49-51,63)
-      - exporter.go / dataValidate.go                         # sqref 展开两处(82-85/85-89)
+      - docs/architecture-p2-export-ergonomics.md   # §4 NewSheet 返回类型 + §4.3 空边界写出手续
+      - docs/prd-p2-export-ergonomics.md            # §3.2 期望签名 + C2 验收
+      - excel.go                                    # Sheet(13)/WithHeading(35)/FromCollection(23) 真实签名
+      - exporter.go                                 # writeData(116-132) 依赖 WithHeading/FromCollection
     pattern_ref:
-      - "reader.close() error 返回；Import 具名返回值 + defer 闭包合并 closeErr（err==nil 时覆盖）"
-      - "sheetNameFor 返回 (name, explicit)；importSingle 复用；goroutine 已显式传参保持"
-      - "Deprecated 注释英文：'// Deprecated: this type has no remaining trigger point...'"
-      - "expandSqref(ref string) (from, to string)；两处调用点拼回各自尾随语义"
+      - "type simpleSheet struct{ headers []interface{}; rows [][]interface{} }"
+      - "func (s simpleSheet) Headers() []interface{} / Rows() [][]interface{}"
+      - "func NewSheet(headers []interface{}, rows [][]interface{}) Sheet { return simpleSheet{...} }"
+      - "多 sheet：map[string]Sheet{'用户': NewSheet(...), '订单': NewSheet(...)} 走 WithMultipleSheets 分支"
+      - "空边界读回断言：NewSheet(nil,rows) 无表头仅数据；NewSheet(headers,nil) 仅表头；均不 panic"
     gotcha:
-      - "P1-1 签名红线：Importer.Close() 签名不变（无返回），只改未导出 reader.close"
-      - "P1-3 删 ExcelLineError.Line 前 grep 全库确认无引用（架构 §3.3）"
-      - "P1-2 goroutine 闭包不引入 name/n 循环变量捕获竞态"
-      - "InvalidUnmarshalError 只改前缀不改分支逻辑（架构 §3.3）"
+      - "NewSheet 返回 Sheet（空接口），动态类型 simpleSheet，勿导出 simpleSheet 类型"
+      - "空 headers 时 writeData 仍 append 一个 nil 首行，数据从 A1 起（非 A2），断言按此预期"
+      - "simpleSheet 不实现 WithXxx，样式/列宽/验证只能靠导出级 Option（架构 §4.4 边界）"
+      - "现有 22 测试零改动，只新增 newsheet_test.go"
     tests:
-      - "现有 17 测试全绿（含 -race）作为重构安全网——PRD §5 第 12-15 条"
+      - "C2a：Export(NewSheet(headers,rows)) 读回断言表头+数据行列序/值类型一致"
+      - "C2b：NewSheet 作 map[string]Sheet 两值组合 WithMultipleSheets 导出，两 sheet 均正确"
+      - "C2c：NewSheet(nil,rows)/NewSheet(headers,nil)/NewSheet(nil,nil) 三边界不 panic 且读回符合预期"
+      - "现有 22 测试全过"
     validate:
       - go test ./...
       - go test ./... -race
       - go vet ./...
+      - gofmt -l .
 
   # ─────────────────────────────────────────────────────────────
-  # M4 benchmark 对比（after 采集 + 对比表 + 门槛判定）
+  # T3 gofmt 债清理（scanner.go 纯空白）
   # ─────────────────────────────────────────────────────────────
-  - id: opt-m4-benchmark
-    title: "M4 benchmark 对比：采集 after 数据 + 产出对比表 + 门槛判定"
+  - id: gofmt-scanner
+    title: "gofmt 债清理：scanner.go 纯空白/对齐/尾空行格式化，语义零变化"
     track: backend
     description: >
-      用与 M1 相同命令与 Go 版本（go1.26.4）采集 after 数据，3 档 × count=3 取中位数，
-      产出 before/after 对比表并判定 P0-4 达标门槛：
-      BenchmarkFillStruct 提速 ≥60% 且 allocs/op ≤10 行均摊；
-      BenchmarkImport 提速 ≥8% 且 allocs/op 不升；
-      ImportConcurrent/ScanSlice/FillStruct/Relation 无回退。
+      对 scanner.go 执行 gofmt -w。改动须为纯空白：RelationResolver 结构体字段对齐（约 205-219 行）+
+      NewRelationResolver 复合字面对齐 + 文件尾多余空行（约 396-398）。不改任何标识符/字符串/控制流/注释内容。
+      验证：git diff scanner.go 仅空白；gofmt -l . 归零（全仓）；go test ./... 全过（语义锚点 PRD R5）。
     must_read:
-      - docs/architecture-optimization-implementation.md      # §2.5 门槛数值与规范
-      - docs/optimization-analysis.md                         # §3.1 基线数据
+      - docs/prd-p2-export-ergonomics.md            # §3.3 gofmt + R5 语义零变化
+      - scanner.go                                  # 确认仅格式化，不读不改业务逻辑
     pattern_ref:
-      - "go test -run '^$' -bench 'Benchmark(FillStruct|Import|ImportConcurrent|ScanSlice|Relation)$' -benchtime=1s -count=3 -benchmem ./..."
+      - "gofmt -w scanner.go"
+      - "git diff scanner.go 逐 hunk 确认仅空白/对齐/尾空行"
+      - "gofmt -l . 输出为空（scanner.go 归零且全仓干净）"
     gotcha:
-      - "after 与 M1 before 必须同版本（go1.26.4）同参数采集，否则不具可比性"
-      - "对比表标注 Go 1.26.4 采集 vs go.mod 1.23.3"
-      - "门槛判定给明确 PASS/FAIL，不达标回报，不静默通过"
+      - "只 gofmt -w scanner.go，禁手动编辑；若想精确可 gofmt -d scanner.go 预审 diff"
+      - "严禁顺手动 importer/reader/column 业务逻辑（N2 红线）"
+      - "格式化改动单独成块提交，不与其他 task 的 exporter.go 改动交织（PRD R5）"
     tests:
-      - "benchmark 对比表（3 档 × 中位数）+ 门槛判定"
+      - "gofmt -l . 输出为空"
+      - "现有 22 测试全过（语义锚点）"
+    validate:
+      - gofmt -l .
+      - go test ./...
+
+  # ─────────────────────────────────────────────────────────────
+  # T4 C6 文档化 + 既有类型漂移修正
+  # ─────────────────────────────────────────────────────────────
+  - id: readme-docs
+    title: "C6 readme 文档化（NewExporterWithOptions 三 Option + NewSheet 单/多 sheet）+ 修正 readme.go 既有类型漂移 + C4 before/after 行数对比"
+    track: backend
+    description: >
+      新增 NewExporterWithOptions（WithStyle/WithDataValidation/WithColumnWidths 各一例）与
+      NewSheet（单 sheet + 多 sheet 两例）英文说明 + Go 代码块，示例与实现签名一致可编译。
+      连带修正 readme.md:101（Style() 返回 map[string]*excelize.Style → map[string]Style）与
+      readme.md:114（DataValidation() 返回 map[string]*excelize.DataValidation → map[string]DataValidate），
+      修正后逻辑等价、不改任何已导出符号。产出 C4 before/after 行数对比表（三配置单表导出 + 纯数据
+      单表导出两场景，口径仅计用户手写样板行，两范式产出同一张 xlsx），落入 P2-1 40-60%/P2-2 50-70%。
+    must_read:
+      - docs/architecture-p2-export-ergonomics.md   # §1.5 readme 漂移 + §7.4 + §6 C4 样板对比
+      - docs/prd-p2-export-ergonomics.md            # C4/C6 验收
+      - readme.md                                   # 现有示例风格 + 101/114 漂移行
+      - excel.go                                    # 真实接口签名（保证示例一致）
+    pattern_ref:
+      - "NewExporterWithOptions 示例：三 WithXxx 以函数参数叠加，与旧结构体范式产同张 xlsx"
+      - "NewSheet 单 sheet：NewExporter+Export(NewSheet(headers,rows))；多 sheet：map[string]Sheet"
+      - "旧范式示例类型改回 map[string]Style / map[string]DataValidate，与 excel.go 签名一致"
+      - "before/after 行数对比表（用户手写样板行口径）"
+    gotcha:
+      - "示例代码必须与实现签名一致（无 readme/实现漂移），可用 go build 或抽取示例测试验证可编译"
+      - "修正 101/114 仅改返回类型为正确值类型，不改方法名/逻辑/新增符号"
+      - "不新增第三方依赖、不改 xlsx: 标签、不碰 test/ 夹具"
+    tests:
+      - "readme 含 NewExporterWithOptions 三 Option 各一例 + NewSheet 单/多 sheet 两例"
+      - "C4 before/after 行数对比表落入 40-70% 区间"
     validate:
       - go test ./...
       - go vet ./...
+      - gofmt -l .
 
 dispatch:
   - agent: devflow-backend-dev
     task_ids:
-      - opt-m1-baseline-lock
-      - opt-p0-4-field-cache
-      - opt-p1-code-quality
-      - opt-m4-benchmark
+      - p2-1-options
+      - p2-2-newsheet
+      - gofmt-scanner
+      - readme-docs
     boundary:
       allowed_files:
-        - scanner.go
-        - importer.go
-        - reader.go
-        - errors.go
-        - column.go
         - exporter.go
+        - excel.go
+        - style.go
         - dataValidate.go
-        - readme.md            # 可选，仅 P1-3 附带说明同步（PRD §5 第 18 条）
+        - scanner.go            # 仅 gofmt 格式化，纯空白
+        - readme.md             # C6 文档化 + 既有类型漂移修正
       allow_new_test_files: true
-        # 新增 *_test.go（scanner_test.go 增补缓存测试函数、必要时新增并发测试文件）
+        # 新增 exporter_options_test.go / newsheet_test.go（新函数，不得改既有测试函数）
       forbidden_files:
+        - importer.go           # 导入链路业务逻辑，严禁动
+        - reader.go             # 导入链路，严禁动
+        - column.go             # 导入链路，严禁动
+        - errors.go             # 本轮不涉及
         - go.mod
         - go.sum
         - test/**               # 夹具 xxx.xlsx 等，严禁删改
         - v1/**
       forbidden_actions:
+        - "不得修改、删除、改名任何已导出符号（Sheet/WithXxx/FromCollection/NewExporter/Exporter.Export 等）"
         - "不得修改既有测试函数（只可新增 *_test.go 增补新函数）"
-        - "不得新增第三方依赖"
-        - "不得修改任何已导出 API 签名"
+        - "不得新增第三方依赖（当前仅 spf13/cast 与 xuri/excelize/v2）"
         - "不得修改 xlsx: 标签解析语义与中文列名文案"
+        - "不得动 importer.go/reader.go/column.go 业务逻辑（scanner.go 仅 gofmt 例外）"
 
 memorant_recall_query: >
-  go-excelize parse 反射缓存 reflect.Type sync.Map header 索引 并发安全 field 元数据
-  benchmark FillStruct allocs 优化 死类型 Deprecated close 吞错
+  go-excelize 导出 Exporter ExportOption functional options WithStyle WithDataValidation
+  WithColumnWidths NewSheet simpleSheet 覆盖语义 sheet 级 导出级 能力对等 行为级断言 读回 xlsx
+  gofmt scanner.go 空白 readme 类型漂移 Style DataValidate 值类型
 
 methodology:
-  tdd: "P0-4 并发正确性测试先行（-race 先红后绿）；P1×5 以 17 测试为安全网先锁行为再重构"
-  benchmark: "3 档 × count=3 中位数，夹具 ResetTimer 前，标注 Go 1.26.4 vs go.mod 1.23.3"
-  validate: "go test ./... + go vet ./...；P0-4 task 加 -race；M4 加 benchmark 命令与门槛判定"
+  tdd: "新 API 测试先行（未实现符号编译失败=红，行为级读回断言=绿）；三类 Option + NewSheet 边界全覆盖"
+  compatibility: "纯增量：现有 API 签名/行为零变化，现有 22 测试零改动全过，xlsx: 标签冻结"
+  r3_semantics: "R3 覆盖语义必须测试锁定：sheet 级接口方法覆盖导出级 Option（样式/列宽/验证三维度各一条）"
+  c4_boilerplate: "readme 示例 before/after 行数对比表（P2-1 40-60%，P2-2 50-70%），实现报告给对比表"
+  validate: "go test ./... + go test ./... -race + go vet ./... + gofmt -l ."
