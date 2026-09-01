@@ -97,9 +97,9 @@ func (m newMulti) Sheets() map[string]Sheet { return m }
 // TestNewSheet_EmptyBoundaries asserts C2c: nil headers / nil rows / both-nil do
 // not panic and read back as expected.
 func TestNewSheet_EmptyBoundaries(t *testing.T) {
-	// nil headers -> data starts at A1 (writeData appends a nil first row that
-	// GetRows omits); nil rows -> header only; nil+nil -> exporter drops the
-	// empty default sheet, so GetRows returns ErrSheetNotExist.
+	// nil headers -> data follows a retained nil first row (A2); nil rows ->
+	// header only; nil+nil -> writeData writes one empty row and GetRows omits
+	// it, so the result is an empty row set.
 	path := tmpPath(t, "newsheet-empty-nilheaders.xlsx")
 	ex := NewExporter(path)
 	if err := ex.Export(NewSheet(nil, [][]interface{}{{"a", "b"}})); err != nil {
@@ -138,14 +138,14 @@ func TestNewSheet_EmptyBoundaries(t *testing.T) {
 		t.Fatalf("Export nil+nil: %v", err)
 	}
 	_ = ex.Close()
-	// nil+nil: writeData appends one nil row -> len(rows)==1 -> exporter keeps
-	// Sheet1. Read back and assert a single empty row.
+	// nil+nil: writeData appends one nil row; that empty row has no cells, so
+	// GetRows omits it and returns an empty non-nil slice.
 	f = mustOpenSheet(t, path)
 	rows, err = f.GetRows(defaultSheetName)
 	if err != nil {
 		t.Fatalf("GetRows nil+nil: %v", err)
 	}
-	if len(rows) != 0 && !(len(rows) == 1 && len(rows[0]) == 0) {
-		t.Errorf("nil+nil rows = %#v, want single empty row", rows)
+	if !reflect.DeepEqual(rows, [][]string{}) {
+		t.Errorf("nil+nil rows = %#v, want empty slice", rows)
 	}
 }
