@@ -86,6 +86,30 @@ func (r *reader) GetHeader(name string) (row []string, err error) {
 	return
 }
 
+// rows 返回一个流式迭代器，游标停在第一条数据行（跳过 r.skip 个元数据行 + 1 行表头）。
+// 与 GetRows 的 skip 语义对齐（GetRows 返回 rows[r.skip:]，scanSlice 再取 rows[1:] 跳过表头），
+// 因此这里在 Rows 迭代器上先前进 r.skip+1 步。
+func (r *reader) rows(name string) (*excelize.Rows, error) {
+	if r == nil || r.file == nil {
+		return nil, fmt.Errorf("reader is not initialized")
+	}
+
+	rows, err := r.file.Rows(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// 跳过 r.skip 个 meta 行 + 表头行，使游标落在首条数据行。若在表头之前就耗尽，
+	// 保留空迭代器（调用方 for rows.Next() 循环自然产出零行）。
+	for i := 0; i < r.skip+1; i++ {
+		if !rows.Next() {
+			break
+		}
+	}
+
+	return rows, nil
+}
+
 func (r *reader) close() error {
 	if r == nil || r.file == nil {
 		return nil
