@@ -1,98 +1,133 @@
-# 后端实现报告
+# Backend Task Report — go-excelize 三个 P0 正确性 Bug 修复
 
-**Plan**: .devflow/scope.yaml
-**Branch**: feature/go-excelize-optimization-analysis-b3707d
-**Status**: COMPLETE
+**Status: COMPLETE**
 
-## 概要
-完成 go-excelize 全库优化空间分析（分析型任务，未改任何源码）。产出 2 个正式交付物（`benchmark_test.go` + `docs/optimization-analysis.md`）+ 中间素材（`.devflow/analysis-notes/*`）。覆盖五维度（性能/代码质量/API/正确性/优雅性），采集 6 函数 × 3 档规模 × count=3 的 benchmark 实测数据，产出 4 条 P0、5 条 P1、4 条 P2 建议。
+分支：`fix/go-excelize-three-p0-correctness-bugs-bc2528`
+工作区：`/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-three-p0-correctness-bugs-bc2528`
+
+三个 task 全部按 scope.yaml 依赖顺序串行完成，均保持严格 TDD 闭环（先失败 → 修复 → 通过），无 blocked 项。
 
 ## 任务结果
 
-| 任务 ID | 标题 | 状态 | Task VALIDATE | 说明 |
-|---------|------|------|---------------|------|
-| analysis-1 | M1 现状梳理 | completed | ✅ 通过 | 产出依赖图/标签矩阵/readme差异/Close清单 4 项素材 |
-| analysis-2 | M2 性能基线 | completed | ✅ 通过 | 新增 benchmark_test.go，6 函数 × 3 档数据 |
-| analysis-3 | M3 五维分析 | completed | ✅ 通过 | 五维结论 + 性能绑定实测数据 |
-| analysis-4 | M4 建议清单 | completed | ✅ 通过 | 13 条建议 9 字段完整 |
-| analysis-5 | M5 报告定稿 | completed | ✅ 通过 | docs/optimization-analysis.md，P0 第 1-9 条自检通过 |
+| 任务 ID | 标题 | 状态 | VALIDATE | 说明 |
+|---------|------|------|----------|------|
+| fix-p0-2-islengtherror | IsLengthError 恒 false | completed | ✅ 通过 | errors.go 返回值指针→值 |
+| fix-p0-1-resolvesheetname | 显式 sheet 名静默回退 | completed | ✅ 通过 | reader.go + importer.go 增 explicit 信号 |
+| fix-p0-3-converttotype | 类型不匹配静默填零值/panic | completed | ✅ 通过 | scanner.go 增 strict 转换 |
 
-### 各任务 validate 详情
+---
 
-#### analysis-1
-- `go vet ./...`：✅ 无输出
-- `go test ./... -run TestImport -v`：✅ PASS（TestImport/TestImportConcurrentReportsAllSheets 通过）
+## Task 1: fix-p0-2-islengtherror
 
-#### analysis-2
-- `go test ./... -run=^$ -bench='BenchmarkImport$|BenchmarkExport$' -benchmem -benchtime=1x`：✅ 输出 ns/op/B/op/allocs 各档数据，无 panic
-- `go test ./...`：✅ PASS
-- `go vet ./...`：✅ 无输出
+### TDD 闭环证据
 
-#### analysis-3
-- `go test ./...`：✅ PASS
-- `go vet ./...`：✅ 无输出
+**失败（红）**：新增 `TestIsLengthError_True`，运行 `go test ./... -run 'TestIsLengthError|TestIsMismatchError' -v`：
+```
+--- FAIL: TestIsLengthError_True
+    errors_test.go:17: expected IsLengthError() == true, got false
+```
 
-#### analysis-4
-- `go test ./...`：✅ PASS
+**修复**：`errors.go:60-62` `newHeaderLengthError` 返回值由 `&HeaderLengthError{...}`（指针）改为 `HeaderLengthError{...}`（值），与 `newHeaderMismatchError` 的既有正确范式对齐。
 
-#### analysis-5
-- `go test ./...`：✅ PASS
-- `go vet ./...`：✅ 无输出
+**通过（绿）**：4 个测试全部 PASS，`go test ./...` 全过，`go vet ./...` 无输出。
 
-## 变更文件
-- 新增：
-  - `benchmark_test.go` (CREATE) — 可复现性能基线，6 benchmark 函数
-  - `docs/optimization-analysis.md` (CREATE) — 唯一正式交付物
-  - `.devflow/analysis-notes/01-现状梳理-依赖图.md` (CREATE) — 过程素材
-  - `.devflow/analysis-notes/01-现状梳理-标签矩阵.md` (CREATE)
-  - `.devflow/analysis-notes/01-现状梳理-readme差异.md` (CREATE)
-  - `.devflow/analysis-notes/01-现状梳理-Close清单.md` (CREATE)
-  - `.devflow/analysis-notes/03-五维分析-代码质量.md` (CREATE)
-  - `.devflow/analysis-notes/03-五维分析-正确性.md` (CREATE)
-  - `.devflow/analysis-notes/03-五维分析-API设计.md` (CREATE)
-  - `.devflow/analysis-notes/03-五维分析-优雅性.md` (CREATE)
-  - `.devflow/analysis-notes/03-五维分析-性能.md` (CREATE)
-  - `.devflow/analysis-notes/04-建议清单.md` (CREATE)
-- 修改：无任何库源码修改
+### 变更文件
+- `errors.go`（update）：newHeaderLengthError 返回类型指针→值
+- `errors_test.go`（create）：4 个测试（TestIsLengthError_True / TestIsMismatchError_True / TestIsLengthError_NegativeCases / TestIsLengthError_NotWrappedLengthError）
 
-## benchmark 数据摘要（中位数，count=3）
+### 偏差
+- 无。未改 IsLengthError 的 target（保持值 target 风格一致）。
 
-环境：Apple M2 (arm64)，go1.26.4 darwin/arm64（go.mod 声明 1.23.3）
+---
 
-| Function | 1e2 行 ns/op | 1e4 行 ns/op | 1e5 行 ns/op | 1e5 行 B/op | 1e5 行 allocs |
-|----------|-------------|-------------|-------------|------------|--------------|
-| Import | 2.94ms | 219ms | 3.82s | 1.73GB | 36.6M |
-| ImportConcurrent | 2.78ms | 222ms | 3.82s | 1.73GB | 36.6M |
-| Export | 4.96ms | 383ms | 4.05s | 2.50GB | 31.7M |
-| ScanSlice | 1.94ms | 159ms | 2.36s | 1.26GB | 26.5M |
-| FillStruct | 0.20ms | 20.1ms | 199ms | 194MB | 3.3M |
-| Relation | 1.74ms | 74.5ms | 732ms | 378MB | 6.0M |
+## Task 2: fix-p0-1-resolvesheetname
 
-关键换算：Import 单行 366 allocs，其中 FillStruct 仅 33 allocs（9%），其余 ~333 来自 GetRows 底层 string 解析 + parse 每行重复反射。
+### TDD 闭环证据
 
-## 五维结论摘要
-- **性能**：有优化空间——单行 366 次分配，字段元数据无缓存（每行重复 parse 反射）是低成本高收益点。
-- **代码质量**：有优化空间——Import/ImportConcurrent 重复分发、吞错、死类型（ExcelLineError/LinesError）集中。
-- **API 设计**：有优化空间——readme 与实现 6 处漂移（4 处编译失败/静默失效级），导出侧不用标签造成双向机制不对称。
-- **正确性**：有优化空间——3 个真 bug（静默回退掩盖错名、IsLengthError 恒 false、类型不匹配静默填零值/panic）。
-- **使用优雅性**：有优化空间（受限）——Functional Options/helper 可兼容引入，流式导入有内存收益，泛型需 v2。
+**失败（红）**：新增 `TestResolveSheetName_ExplicitMissingSheet`。修复前 `resolveSheetName` 无 `explicit` 参数且不返回 sheet 不存在错误，测试编译失败：
+```
+./errors_test.go:39:44: too many arguments in call to r.resolveSheetName
+        have (string, bool)
+        want (string)
+FAIL    github.com/starme/go-excelize [build failed]
+```
+（通过 `git stash push reader.go importer.go` 保留测试、还原旧源码演示红阶段，随后 `git stash pop` 恢复。）
 
-## 建议清单统计
-- P0：4 条（3 正确性 + 1 性能）
-- P1：5 条（全代码质量）
-- P2：4 条（全使用优雅性）
-- 合计 13 条
+**修复**：`reader.go` `resolveSheetName(name string, explicit bool)` 新增 explicit 参数，仅当 `explicit && name != "" && name != defaultSheetName && !sheetExists(name)` 时返回 `excelize.ErrSheetNotExist{SheetName: name}`；`importer.go` Import/ImportConcurrent 两个 default 分支在 `f.(WithSheetName)` 成立时传 `explicit=true`。
 
-## 与计划的偏差
-- 偏差 1：`BenchmarkFillStruct` 初版设计为"单行映射"微基准（3 档规模数据无区分度），已修正为"每档循环映射 rows 条行数据"，使规模参数有真实意义，符合 architecture 文档"逐行字段映射"定位。
-- 偏差 2：`BenchmarkRelation` 未复用 `MainSheetRow`（其嵌套 relation 链指向两张子表，构造复杂），改用专用 `benRelationRow`/`benDummyChild` 模型，仅带单个 relation 字段，主表 N 行 × 子表固定 100 行，聚焦 relation 匹配复杂度。
-- 偏差 3：P0-1（resolveSheetName 静默回退）初判为"应改为显式报错"，实测发现 TestImport 依赖 default("Sheet1")→首 sheet 回退，故修正为"仅显式 sheet 名拼错时报错"，兼容性判定更精确。
+**通过（绿）**：3 个 resolve 测试 PASS，`TestImport` 与 `TestImportConcurrentReportsAllSheets` 仍 PASS（default→首 sheet 回退语义保留），全量 + vet 干净。
 
-## 遇到的问题
-- `errors.As` 值/指针匹配方向陷阱（P0-2 根因，首轮结论方向一度写反已按测试 Agent 反馈修正）：实测确认 `newHeaderLengthError` 返回指针 `*HeaderLengthError`，而 `IsLengthError` target 是值类型，导致 `IsLengthError()` 恒 false；对照组 `IsMismatchError` 值 err + 值 target 正常。已通过包内临时 `_test.go` 实测验证（`IsLengthError()=false`、`IsMismatchError()=true`），验证后删除临时文件。
-- benchmark 十万级 Relation/Import 单次耗时约 3.8s，count=3 全量约 5 分钟，后台运行无 OOM。
+### 变更文件
+- `reader.go`（update）：resolveSheetName 增签名
+- `importer.go`（update）：两个调用点传 explicit 信号
+- `errors_test.go`（update）：3 个测试 + newTestReader 辅助
+
+### 偏差
+- 无。default 名回退首 sheet 语义未破坏（TestImport 通过）。
+
+---
+
+## Task 3: fix-p0-3-converttotype
+
+### TDD 闭环证据
+
+**失败（红）**：新增 4 个测试，运行 `go test ./... -run 'TestConvertToType' -v`：
+```
+--- FAIL: TestConvertToType_TypeMismatchErrors
+    scanner_test.go:39: expected error for "abc" into int64, got nil
+--- FAIL: TestConvertToType_UnknownTypeErrors
+panic: reflect.Set: value of type string is not assignable to type []string
+```
+两个根因（静默填零值 + panic）均被测试捕捉。
+
+**修复**：
+1. `scanner.go` 新增未导出 `convertToTypeStrict(fieldName string, targetType reflect.Type, value string) (reflect.Value, error)`：int/int64/float64/bool 用 `strconv.Parse*` 显式解析，失败返回带字段名+期望类型+实际值错误；`string` 直接返回；空串返回 `reflect.Zero(targetType)`（豁免填零值）；slice/struct/ptr/interface 等不支持种类返回明确错误。
+2. `applyFieldRule` 的 default 赋值路径（`f.deft != nil`）与常规赋值路径改为调用 strict 版本；`ConvertToType`（导出）签名保持不变。
+
+**通过（绿）**：4 个测试 PASS，`TestImport` 与 `TestRelation` 仍 PASS（空单元格 int 字段 `Selected:0/Required:0` 正确填零值），全量 + vet 干净。
+
+### 变更文件
+- `scanner.go`（update）：新增 strict 转换函数，applyFieldRule 两处赋值路径改 strict
+- `scanner_test.go`（create）：4 个测试
+- `readme.md`（update）：类型转换严格解析 + 显式 sheet 名拼错报错说明
+
+### 偏差
+- **有意决策**：`TypeConverter.ConvertToType` 与 `FieldMapper.converter` 字段保留但不再被 applyFieldRule 调用（scope 明确要求 `ConvertToType` 导出签名冻结不可删）。`applyFieldRule` 接收者 `fm` 当前不再引用 `fm.converter`，Go 允许未使用接收者，编译正常。未顺手清理 `converter` 字段以免越界。
+- **未知类型测试设计修正**：最初用嵌套 struct 字段测 panic，但 `parse()` 会递归枚举嵌套 struct 并 skip 复合字段本身，导致 struct 字段不进 fields 列表、测试误通过。改用无 `split` 标签的 `[]string` 字段（落入 ConvertToType default 分支）成功复现 panic。
+
+### Benchmark 回归对比
+
+基线（docs/optimization-analysis.md §3.1）：Import 1e5 ≈ 3.82s（36.6M allocs）、FillStruct 1e5 ≈ 199ms。
+
+| 基准 | 基线 | 本次（count=3 中位数） | 偏移 | allocs 对比 |
+|------|------|----------------------|------|-------------|
+| BenchmarkImport 1e5 | 3.82s | ~4.40s | +15%* | 36205549 vs 36605588（略降）|
+| BenchmarkFillStruct 1e5 | 199ms | ~216ms | +8.5% | 2.90M vs 3.30M（略降）|
+
+\* Import 三次采样 4.21s/4.40s/5.08s，波动达 20%，`-benchtime=3x` 每档仅 3 次采样噪声大；中位数 +15% 仍在 ±20% 内。allocs 均无回退（略降）。FillStruct（纯转换热路径）+8.5% 符合 strconv.Parse 与 cast 强转同量级预期。**结论：无显著回退，达标。**
+
+---
+
+## 最终 validate 结果
+
+- `go test ./...` → `ok github.com/starme/go-excelize`（全量通过）
+- `go vet ./...` → 无输出
+- 红线自检：未修改 exporter.go/column.go/excel.go/func.go/style.go/dataValidate.go、未改动任何现有测试（importer_test.go 只读）、未改动 test/ 夹具、未改 .devflow/ 配置/go.mod/go.sum、未引入新依赖、未改导出 API 签名与 xlsx: 标签语法。
+
+---
+
+## Commit 清单
+
+| hash | message |
+|------|---------|
+| `6dfd021` | fix(errors): correct IsLengthError false-negative from pointer/value target mismatch |
+| `57876b0` | fix(import): error on explicit missing sheet name instead of silent fallback |
+| `84b1740` | fix(scanner): report errors on type mismatch and unknown types instead of silent zero/panic |
+
+---
 
 ## memory_candidates
-- [backend_pattern] Go 反射映射热路径优化：字段元数据按 reflect.Type 缓存，避免每行重复 parse struct tag；header→index 建 map 替代 O(字段×表头) 线性查找。
-- [bug] `errors.As` 值/指针匹配方向陷阱：指针 error（`&T{}`）不能赋值给值类型 target（`&T{}` 指向值），故"指针 err + 值 target"恒 false；值 err + 值 target 正常。本库 `newHeaderLengthError` 返回指针 + `IsLengthError` 用值 target 导致该判定方法恒 false；建议整库错误类型统一返回风格（全指针或全值），并让判定方法的 target 与构造函数返回类型一致。
-- [snippet] 包内黑盒+白盒 benchmark 组合：端到端（Import/Export/E2E）决定"快不快"，白盒（ScanSlice/FillStruct）定位"慢在哪"；夹具用 b.TempDir() 内存构造 + b.ResetTimer() 排除生成耗时。
+
+1. **Go `errors.As` 值/指针 target 陷阱**：pointer error（`&T{}`）配值类型 target（`&HeaderLengthError{}`）恒 false；构造函数与判定方法的值/指针形态必须一致。本库 P0-2 落地为：`newHeaderLengthError` 返回值类型与 `IsLengthError` 值 target 对齐。
+2. **反射复合字段的陷阱**：用 `reflect` 遍历结构体字段时，`parse()` 递归枚举 struct 字段并 skip 复合类型字段本身，导致"嵌套 struct 字段进入常规赋值路径"测试设计不成立；真正落入标量转换 default 分支的是无 split 标签的 slice 等复合类型。
+3. **严格类型转换边界**：从 `cast` 强转切到 `strconv.Parse*` 严格转换时，空字符串必须显式豁免填零值，否则含大量空单元格的 int 字段会误报错。

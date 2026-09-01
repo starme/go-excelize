@@ -116,12 +116,19 @@ func (r *reader) firstSheetName() (string, error) {
 	return list[0], nil
 }
 
-func (r *reader) resolveSheetName(name string) (string, error) {
+func (r *reader) resolveSheetName(name string, explicit bool) (string, error) {
 	if r == nil {
 		return "", fmt.Errorf("reader is not initialized")
 	}
 	if name != "" && r.sheetExists(name) {
 		return name, nil
+	}
+	// Explicitly requested sheet name (non-default) that does not exist is an
+	// error, so a typo in WithSheetName surfaces instead of silently loading
+	// the first sheet. Default/empty names keep the fallback-to-first-sheet
+	// semantics (default means "any first sheet").
+	if explicit && name != "" && name != defaultSheetName {
+		return "", excelize.ErrSheetNotExist{SheetName: name}
 	}
 	return r.firstSheetName()
 }

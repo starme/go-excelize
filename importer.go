@@ -48,11 +48,13 @@ func (i Importer) Import(e Excel) error {
 	switch f := e.(type) {
 	default:
 		name := defaultSheetName
+		explicit := false
 		if n, ok := f.(WithSheetName); ok {
 			name = n.SheetName()
+			explicit = true
 		}
 
-		resolved, err := i.reader.resolveSheetName(name)
+		resolved, err := i.reader.resolveSheetName(name, explicit)
 		if err != nil {
 			return err
 		}
@@ -90,11 +92,13 @@ func (i Importer) ImportConcurrent(e Excel, workers int) error {
 	switch f := e.(type) {
 	default:
 		name := defaultSheetName
+		explicit := false
 		if n, ok := f.(WithSheetName); ok {
 			name = n.SheetName()
+			explicit = true
 		}
 
-		resolved, err := i.reader.resolveSheetName(name)
+		resolved, err := i.reader.resolveSheetName(name, explicit)
 		if err != nil {
 			return err
 		}

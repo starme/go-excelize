@@ -1,38 +1,33 @@
 schema_version: 1
 
 task:
-  id: "go-excelize-optimization-analysis-b3707d"
-  slug: "go-excelize-optimization-analysis"
-  title: "go-excelize 优化空间分析"
-  kind: "feature"
-  description: "先分析下当前的这个go扩展包，是否有更优化的空间"
+  id: "go-excelize-three-p0-correctness-bugs-bc2528"
+  slug: "go-excelize-three-p0-correctness-bugs"
+  kind: "bugfix"
+  description: "修复 go-excelize 三个 P0 正确性 bug（P0-1 resolveSheetName 静默回退 / P0-2 IsLengthError 恒 false / P0-3 ConvertToType 静默填零值，依据 docs/optimization-analysis.md）"
   current_phase: "done"
   status: "active"
 
 git:
-  base_ref: "wip/pre-analysis-snapshot"
-  base_commit: "44d31b1ac74631bb503eb4c1a2607770db05ae70"
-  branch: "feature/go-excelize-optimization-analysis-b3707d"
-  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-analysis-b3707d"
+  base_ref: "origin/feature/go-excelize-optimization-analysis-b3707d"
+  base_commit: "4c6bf3818ebc0c61371eb7580b4aeed2d6ac1766"
+  branch: "fix/go-excelize-three-p0-correctness-bugs-bc2528"
+  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-three-p0-correctness-bugs-bc2528"
 
 parent_task_id: null
 source_task_id: null
 
 project_snapshot:
   source: ".devflow/project.yaml"
-  category: "library_or_other"
-  capabilities:
-    - backend
 
 workflow:
   selected_tracks:
-    - implementation
-    - testing
+    - backend
 
 artifacts:
-  prd: "docs/prd-optimization-analysis.md"
-  architecture: "docs/architecture-optimization-analysis.md"
+  prd: null
+  architecture: null
   scope: ".devflow/scope.yaml"
   test_reports:
     - ".devflow/test-report.md"
-  acceptance_report: ".devflow/acceptance-report.md"
+  acceptance_report: null

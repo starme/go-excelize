@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cast"
@@ -34,6 +35,46 @@ func (tc *TypeConverter) ConvertToType(targetType reflect.Type, value any) refle
 		// 对于不支持的类型，尝试直接转换或返回字符串
 		converted := cast.ToString(value)
 		return reflect.ValueOf(converted)
+	}
+}
+
+// convertToTypeStrict 严格解析单元格字符串为目标类型。与 ConvertToType 不同，
+// 它显式解析数字/布尔值，失败时返回带上下文的错误；空字符串视为缺值，返回目标类型零值。
+// 不支持的类型（slice/struct/ptr/interface 等复合类型）返回明确错误而非静默转换。
+func convertToTypeStrict(fieldName string, targetType reflect.Type, value string) (reflect.Value, error) {
+	if value == "" {
+		return reflect.Zero(targetType), nil
+	}
+
+	switch targetType.Kind() {
+	case reflect.String:
+		return reflect.ValueOf(value), nil
+	case reflect.Int:
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("field %s: cannot convert %q to int: %w", fieldName, value, err)
+		}
+		return reflect.ValueOf(n), nil
+	case reflect.Int64:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("field %s: cannot convert %q to int64: %w", fieldName, value, err)
+		}
+		return reflect.ValueOf(n), nil
+	case reflect.Float64:
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("field %s: cannot convert %q to float64: %w", fieldName, value, err)
+		}
+		return reflect.ValueOf(f), nil
+	case reflect.Bool:
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return reflect.Value{}, fmt.Errorf("field %s: cannot convert %q to bool: %w", fieldName, value, err)
+		}
+		return reflect.ValueOf(b), nil
+	default:
+		return reflect.Value{}, fmt.Errorf("field %s: unsupported target type %s for value %q", fieldName, targetType.Kind(), value)
 	}
 }
 
@@ -110,7 +151,14 @@ func (fm *FieldMapper) applyFieldRule(f field, structValue reflect.Value, cellVa
 
 	// 设置默认值
 	if f.deft != nil {
-		defaultValue := fm.converter.ConvertToType(f.typ, f.deft)
+		deftStr, ok := f.deft.(string)
+		if !ok {
+			return fmt.Errorf("field %s: default value is not a string: %v", f.name, f.deft)
+		}
+		defaultValue, err := convertToTypeStrict(f.name, f.typ, deftStr)
+		if err != nil {
+			return err
+		}
 		fieldValue.Set(defaultValue)
 	}
 
@@ -139,7 +187,10 @@ func (fm *FieldMapper) applyFieldRule(f field, structValue reflect.Value, cellVa
 	}
 
 	// 常规字段赋值
-	convertedValue := fm.converter.ConvertToType(f.typ, cellValue)
+	convertedValue, err := convertToTypeStrict(f.name, f.typ, cellValue)
+	if err != nil {
+		return err
+	}
 	fieldValue.Set(convertedValue)
 	return nil
 }

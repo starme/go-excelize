@@ -71,6 +71,14 @@ func (e export) SheetName() string {
 }
 ```
 
+> 当 `SheetName()` 显式返回一个非默认（非 `Sheet1`）的 sheet 名、但该 sheet 不存在时，
+> Import 会返回 `excelize.ErrSheetNotExist` 而不是静默回退到首个 sheet，便于排查拼写错误。
+> 默认名（`Sheet1`）或空名仍回退到首个 sheet。
+
+> 类型转换采用严格解析：非空单元格值若无法解析为目标字段类型（如 `int64` 字段收到 `"abc"`），
+> Import 会返回带字段名、期望类型和实际值的错误，而不再静默填入零值。空单元格/空字符串视为缺值，
+> 仍填充目标类型的零值。
+
 #### 定义表头行
 ```go
 func (e export) Headers() []interface{} {
