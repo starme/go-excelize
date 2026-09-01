@@ -96,10 +96,22 @@ func (fm *FieldMapper) FillStruct(headers []string, row []string, target reflect
 	case reflect.Map:
 		return fm.fillMap(headers, row, target)
 	case reflect.Struct:
-		return fm.fillStruct(headers, row, target, onRelation)
+		return fm.fillStruct(row, buildHeaderIndex(headers), target, onRelation)
 	default:
 		return errors.New("unsupported target type for filling")
 	}
+}
+
+// buildHeaderIndex 构建表头→列号索引，重复表头取第一个匹配（对齐原线性查找
+// 的 break 语义），后续每字段定位列从 O(表头) 降到 O(1)。
+func buildHeaderIndex(headers []string) map[string]int {
+	headerIdx := make(map[string]int, len(headers))
+	for i, h := range headers {
+		if _, exists := headerIdx[h]; !exists {
+			headerIdx[h] = i
+		}
+	}
+	return headerIdx
 }
 
 func (fm *FieldMapper) fillMap(headers []string, row []string, target reflect.Value) error {
@@ -114,21 +126,16 @@ func (fm *FieldMapper) fillMap(headers []string, row []string, target reflect.Va
 	return nil
 }
 
-func (fm *FieldMapper) fillStruct(headers []string, row []string, target reflect.Value, onRelation func(field, reflect.Value, reflect.Value) error) error {
-	fields, err := parse(target)
+func (fm *FieldMapper) fillStruct(row []string, headerIdx map[string]int, target reflect.Value, onRelation func(field, reflect.Value, reflect.Value) error) error {
+	fields, err := parseCached(target.Type())
 	if err != nil {
 		return err
 	}
 
 	for _, fieldSpec := range fields {
 		var cellValue string
-		for i, header := range headers {
-			if header == fieldSpec.alias {
-				if i < len(row) {
-					cellValue = row[i]
-				}
-				break
-			}
+		if i, ok := headerIdx[fieldSpec.alias]; ok && i < len(row) {
+			cellValue = row[i]
 		}
 
 		if err := fm.applyFieldRule(fieldSpec, target, cellValue, onRelation); err != nil {
@@ -372,6 +379,7 @@ func (s *scanner) scanSlice(rv reflect.Value) error {
 	}
 
 	dataRows := rows[1:]
+	headerIdx := buildHeaderIndex(header)
 	for i := range dataRows {
 		row := dataRows[i]
 		if i >= rv.Cap() {
@@ -380,7 +388,7 @@ func (s *scanner) scanSlice(rv reflect.Value) error {
 		if i >= rv.Len() {
 			rv.SetLen(i + 1)
 		}
-		if err = s.fieldMapper.FillStruct(header, row, rv.Index(i), s.handleRelation); err != nil {
+		if err = s.fieldMapper.fillStruct(row, headerIdx, rv.Index(i), s.handleRelation); err != nil {
 			return err
 		}
 	}

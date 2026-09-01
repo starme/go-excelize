@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 )
 
 const (
@@ -46,9 +47,6 @@ func parse(v reflect.Value) ([]field, error) {
 				return nil, err
 			}
 			fields = append(fields, c...)
-			//for k, val := range c {
-			//	fields[k] = val
-			//}
 			continue
 		}
 		t := v.Type().Field(i).Tag.Get(Identify)
@@ -60,10 +58,31 @@ func parse(v reflect.Value) ([]field, error) {
 			s.typ = v.Type().Field(i).Type
 			s.name = v.Type().Field(i).Name
 			fields = append(fields, *s)
-			//fields[s.alias] = *s
 		}
 	}
 	return fields, nil
+}
+
+// fieldCache 是按 reflect.Type 缓存的字段元数据（[]field），包级共享。
+// 键 = 结构体类型；值 = 解析后的字段切片。缓存只存储"解析结果"，解析规则本身
+// 仍在 parse 中，缓存版本复用 parse（构造占位 value）以免双实现语义漂移。
+var fieldCache sync.Map
+
+// parseCached 返回某结构体类型的字段元数据，首次调用解析后 LoadOrStore 进全局
+// fieldCache，后续调用 Load 命中直接返回缓存的 []field。它复用原 parse 逻辑，
+// 仅以 reflect.New(t).Elem() 构造占位 value 传入，保证与直调 parse 逐字节等价。
+func parseCached(t reflect.Type) ([]field, error) {
+	if cached, ok := fieldCache.Load(t); ok {
+		return cached.([]field), nil
+	}
+
+	fields, err := parse(reflect.New(t).Elem())
+	if err != nil {
+		return nil, err
+	}
+
+	actual, _ := fieldCache.LoadOrStore(t, fields)
+	return actual.([]field), nil
 }
 
 func parseTag(t string) *field {
