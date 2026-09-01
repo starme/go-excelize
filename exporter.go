@@ -3,7 +3,6 @@ package excelize
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
-	"strings"
 )
 
 type Exporter struct {
@@ -79,12 +78,9 @@ func (ex Exporter) createSheet(s Sheet, n string) error {
 
 func (ex Exporter) setColWidth(name string, e WithColumnWidths) error {
 	for idx, w := range e.ColumnWidths() {
-		tags := strings.SplitN(idx, ":", 2)
-		if len(tags) == 1 {
-			tags = append(tags, tags[0])
-		}
+		from, to := expandSqref(idx)
 
-		if err := ex.f.SetColWidth(name, tags[0], tags[1], w); err != nil {
+		if err := ex.f.SetColWidth(name, from, to, w); err != nil {
 			return err
 		}
 	}

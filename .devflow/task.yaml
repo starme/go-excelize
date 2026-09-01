@@ -1,18 +1,18 @@
 schema_version: 1
 
 task:
-  id: "go-excelize-three-p0-correctness-bugs-bc2528"
-  slug: "go-excelize-three-p0-correctness-bugs"
-  kind: "bugfix"
-  description: "修复 go-excelize 三个 P0 正确性 bug（P0-1 resolveSheetName 静默回退 / P0-2 IsLengthError 恒 false / P0-3 ConvertToType 静默填零值，依据 docs/optimization-analysis.md）"
+  id: "go-excelize-optimization-implementation-6a1e7b"
+  slug: "go-excelize-optimization-implementation"
+  kind: "feature"
+  description: "继续按照分析报告剩余的实施建议进行实施（docs/optimization-analysis.md 剩余 12 条：P0-4 性能缓存 + P1×5 代码质量 + P2×4 优雅性，具体范围待 PRODUCT_QA 澄清）"
   current_phase: "done"
   status: "active"
 
 git:
-  base_ref: "origin/feature/go-excelize-optimization-analysis-b3707d"
-  base_commit: "4c6bf3818ebc0c61371eb7580b4aeed2d6ac1766"
-  branch: "fix/go-excelize-three-p0-correctness-bugs-bc2528"
-  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-three-p0-correctness-bugs-bc2528"
+  base_ref: "main"
+  base_commit: "c35b0dc931cb92d902c19d740341dd8dd156b99d"
+  branch: "feature/go-excelize-optimization-implementation-6a1e7b"
+  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-implementation-6a1e7b"
 
 parent_task_id: null
 source_task_id: null
@@ -25,9 +25,9 @@ workflow:
     - backend
 
 artifacts:
-  prd: null
+  prd: "docs/prd-optimization-implementation.md"
   architecture: null
   scope: ".devflow/scope.yaml"
   test_reports:
     - ".devflow/test-report.md"
-  acceptance_report: null
+  acceptance_report: ".devflow/acceptance-report.md"

@@ -78,15 +78,22 @@ func (v DataValidate) WithErrorStyle(s excelize.DataValidationErrorStyle) DataVa
 	return v
 }
 
+// expandSqref 展开 sqref 引用的起止标识：单 cell（无 ":"）复制自身为 from==to，
+// 范围（含 ":"）拆分为起止两段。导出列宽设置与数据校验两处共用。
+func expandSqref(ref string) (from, to string) {
+	tags := strings.SplitN(ref, ":", 2)
+	if len(tags) == 1 {
+		tags = append(tags, tags[0])
+	}
+	return tags[0], tags[1]
+}
+
 func (v DataValidate) FormatDataValidate(sqref string) *excelize.DataValidation {
 	dv := excelize.NewDataValidation(v.AllowBlank)
 	dv.SetError(v.ErrorStyle, v.ErrorTitle, v.Error)
 
-	tags := strings.SplitN(sqref, ":", 2)
-	if len(tags) == 1 {
-		tags = append(tags, tags[0])
-	}
-	dv.SetSqref(strings.Join(tags, ":"))
+	from, to := expandSqref(sqref)
+	dv.SetSqref(strings.Join([]string{from, to}, ":"))
 
 	switch v.Type {
 	default:

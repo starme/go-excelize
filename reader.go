@@ -86,11 +86,11 @@ func (r *reader) GetHeader(name string) (row []string, err error) {
 	return
 }
 
-func (r *reader) close() {
+func (r *reader) close() error {
 	if r == nil || r.file == nil {
-		return
+		return nil
 	}
-	_ = r.file.Close()
+	return r.file.Close()
 }
 
 func (r *reader) sheetExists(name string) bool {

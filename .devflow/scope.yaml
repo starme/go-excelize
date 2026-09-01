@@ -1,309 +1,208 @@
 # .devflow/scope.yaml
-# bugfix 模式：修复 go-excelize 三个 P0 正确性 bug（依据 docs/optimization-analysis.md P0-1/P0-2/P0-3）
-# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属于已完成的分析 task，与本 bugfix task 无关，已整体替换）
+# 第二轮优化实施 feature：P0-4 字段元数据缓存 + P1×5 代码质量清理
+# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属上一轮 bugfix task，已整体替换）
+# 技术方案见 docs/architecture-optimization-implementation.md
 
-work_type: bugfix
+work_type: feature
 tracks:
   - backend
 
 affected:
   backend:
     files:
-      - path: reader.go
-        reason: "P0-1 落点：resolveSheetName(123-126) 增加「显式 sheet 名」参数，default 分支静默回退语义保留"
-      - path: importer.go
-        reason: "P0-1 波及点：Import(55)/ImportConcurrent(97) 两处 resolveSheetName 调用点需传递「是否显式」信号"
-      - path: errors.go
-        reason: "P0-2 落点：newHeaderLengthError(60-62) 返回值→值类型，与 newHeaderMismatchError(75-77) 对齐；IsLengthError(36-38) 补触发断言测试"
       - path: scanner.go
-        reason: "P0-3 落点：applyFieldRule(102-145) 赋值前加严格转换/可赋值校验；ConvertToType(16-38) default 分支不再盲目 ToString"
+        reason: "P0-4 落点：fillStruct(117) parse→parseCached、内层 header 线性查找(125-131)改 header→index 映射；包级 sync.Map 字段缓存"
+      - path: importer.go
+        reason: "P1-2 落点：Import/ImportConcurrent default 分支与 sheet 名解析抽 importSingle/sheetNameFor；P1-1 波及点：Import/ImportConcurrent 的 defer Close 合并 closeErr"
+      - path: reader.go
+        reason: "P1-1 落点：close(89-94) 改返回 error，与 GetHeader 标准 closeErr 合并模式对齐"
+      - path: errors.go
+        reason: "P1-3 落点：ExcelLineError/LinesError 加 Deprecated 标注；删 Line 字段+注释代码；InvalidUnmarshalError.Error 前缀修正"
+      - path: column.go
+        reason: "P1-4 落点：删 field.encoding 死字段(24)与 parse 注释掉的旧 map 实现(49-51/63)"
+      - path: exporter.go
+        reason: "P1-5 波及点：setColWidth(82-85) sqref 展开改用 expandSqref helper"
+      - path: dataValidate.go
+        reason: "P1-5 落点：FormatDataValidate(85-89) 抽出 expandSqref，两处共用"
       - path: readme.md
-        reason: "P0-3 行为从『静默填零值』改为『报错』，需同步说明；P0-1 补充『显式 sheet 名拼错报错』说明"
+        reason: "可选：若 P1-3 修正错误前缀/删除死字段影响到 readme 使用方法说明，则同步（PRD §5 第 18 条 P2）"
     new_files:
-      - path: errors_test.go
-        reason: "P0-2 补 IsLengthError/IsMismatchError 触发断言测试（当前缺失）；P0-1 补 resolveSheetName 显式名拼错报错测试"
       - path: scanner_test.go
-        reason: "P0-3 补 ConvertToType/applyFieldRule 类型不匹配报错 + 空值填零值 + 未知类型报错的复现/通过测试"
+        reason: "P0-4 新增：缓存隔离（不同类型不串扰）+ 缓存透明（同类型重复导入一致）+ 并发正确性（-race）测试。注意：scanner_test.go 已存在，为『增补新测试函数』，不得改既有函数"
 
-contract_changes: false     # 三个 P0 均不改已导出 API 签名与 xlsx: 标签语法
+contract_changes: false     # 零导出 API 变化、xlsx: 标签冻结，唯一例外 InvalidUnmarshalError 错误文本（PRD §4.2 豁免）
 contract_files: []
-risk_level: high            # P0-3 行为收紧在导入热路径，可能触发现有测试对空单元格/int 转换的隐性依赖
-parallelizable: false       # 三修复共享 errors.go/scanner.go/reader.go/importer.go，且需串行 TDD（先失败后通过），建议串行
+risk_level: medium           # P0-4 缓存动导入热路径，需并发正确性测试兜底；P1×5 纯重构有 17 测试安全网
+parallelizable: false        # P0-4 与 P1-2 都动 scanner/importer，P0-4 与 P1-4 都动 column.go field 结构体，串行
 
 dependency_order:
   - backend
 
 tasks:
   # ─────────────────────────────────────────────────────────────
-  # P0-2 优先：根因最明确、无行为变更、只改内部构造函数，风险最低，先跑通 TDD 流程
+  # M1 行为锁定（所有后续任务的前置）：先确认 17 测试绿 + 落 benchmark before
   # ─────────────────────────────────────────────────────────────
-  - id: fix-p0-2-islengtherror
-    title: "P0-2 修复 IsLengthError 恒 false（errors.As 值/指针 target 不匹配）"
+  - id: opt-m1-baseline-lock
+    title: "M1 行为锁定：17 测试全绿确认 + benchmark before 数据落盘"
     track: backend
     description: >
-      根因：newHeaderLengthError(60-62) 返回 &HeaderLengthError{}（指针），而 IsLengthError(36-38)
-      的 errors.As target 是 &HeaderLengthError{}（指向值类型）。Go errors.As 语义下，指向值类型的
-      指针 error 无法赋值给值 target，故 errors.As 恒 false，IsLengthError() 恒返回 false。
-      对照组 IsMismatchError(44-46) 正常：newHeaderMismatchError(75-77) 返回 HeaderMismatchError{}（值）
-      + 值 target，匹配成功。
-      方案 A（选定）：newHeaderLengthError 改为返回 HeaderLengthError{}（值），与 newHeaderMismatchError
-      风格对齐。影响面仅 errors.go:61 一处 return 与 importer.go:187 调用点（调用点形式不变，仍
-      `return newHeaderLengthError(...)`，返回类型 error 签名不变，concrete type 由 *T 变 T）。
-    depends_on: []
-    affected_files:
-      - path: errors.go
-        action: update
-      - path: errors_test.go
-        action: create
+      跑 go test ./... 确认现有 17 个测试全绿作为重构安全网基线；跑 benchmark
+      记录 before 三项（FillStruct / Import / 其余回退约束项）数据，供 M4 对比。
+      不改任何源码，纯验证与记录。
     must_read:
-      - path: errors.go
-        why: "36-38 行 IsLengthError 与 60-62 行 newHeaderLengthError 是根因所在；75-77 行 newHeaderMismatchError 是对照修复模板"
-      - path: importer.go
-        why: "187 行 newHeaderLengthError 调用点，确认返回类型改动不波及调用方"
+      - docs/architecture-optimization-implementation.md
+      - docs/prd-optimization-implementation.md
+      - benchmark_test.go
     pattern_ref:
-      - path: errors.go
-        lines: "60-62"
-        note: "需要改：newHeaderLengthError 返回 &HeaderLengthError{} → HeaderLengthError{}"
-      - path: errors.go
-        lines: "75-77"
-        note: "修复模板：newHeaderMismatchError 返回 HeaderMismatchError{}（值）的既有正确范式"
+      - "go test ./..."                    # 17 测试绿基线
+      - "go test ./... -race"              # 现有测试 -race 基线
+      - "go vet ./..."                     # vet 干净基线
+      - "go test -run '^$' -bench 'Benchmark(FillStruct|Import|ImportConcurrent|ScanSlice|Relation)$' -benchtime=1s -count=3 -benchmem ./..."
     gotcha:
-      - "只改 concrete type（指针→值），不得改 newHeaderLengthError 的函数签名（返回类型 error 不变）"
-      - "HeaderLengthError 的 expected/actual 字段是未导出小写，值类型化后 Error() 方法（值接收者）不受影响"
-      - "不要顺手改 IsLengthError 的 target 为指针（方案 B 也能修，但会与 IsMismatchError 的值 target 风格不一致）；本 task 锁定方案 A"
-      - "禁止改动 IsSheetNotExistError(40-42) 与 IsMismatchError(44-46)，它们当前正确"
+      - "baseline 数据须标注 Go 版本 go1.26.4（本机）vs go.mod 1.23.3；M4 after 同版本采集"
+      - "夹具在 b.ResetTimer() 前（现有 benchmark_test.go 已满足，勿改动）"
+      - "只记录不修改，任何测试失败都先回报，不进入后续 task"
     tests:
-      - name: "TestIsLengthError_True（先失败）"
-        failing_before: true
-        assertion: >
-          err := newValidateHeaderError("t", newHeaderLengthError(3, 5))；断言 err.(ValidateHeaderError).IsLengthError() == true。
-          修复前该断言失败（IsLengthError 恒 false），证明测试能捕捉 bug。
-      - name: "TestIsMismatchError_True（既有对照，补回归）"
-        failing_before: false
-        assertion: >
-          err := newValidateHeaderError("t", newHeaderMismatchError(0, "a", "b"))；断言 IsMismatchError() == true。
-          锁定对照组行为不被破坏。
-      - name: "TestIsLengthError_NegativeCases"
-        failing_before: false
-        assertion: >
-          对非长度错误（如 newHeaderMismatchError 的 ValidateHeaderError）断言 IsLengthError() == false，
-          防止「修复后误判所有错误都是长度错误」。
+      - "go test ./...（须 17 全绿）"
+      - "go vet ./...（须干净）"
     validate:
-      - cmd: "go test ./... -run 'TestIsLengthError|TestIsMismatchError' -v"
-        expect: "先确认新增复现测试失败（IsLengthError 断言 false），修复后转为通过"
-      - cmd: "go test ./..."
-        expect: "全部测试通过"
-      - cmd: "go vet ./..."
-        expect: "无输出"
-    acceptance_criteria:
-      - "newHeaderLengthError 返回 HeaderLengthError{}（值），newHeaderMismatchError 风格对齐"
-      - "TestIsLengthError_True 修复前失败、修复后通过（TDD 闭环证据）"
-      - "IsMismatchError 行为不变（对照测试仍通过）"
-      - "未改任何导出 API 签名"
+      - go test ./...
+      - go vet ./...
 
   # ─────────────────────────────────────────────────────────────
-  # P0-1：改 resolveSheetName 签名（未导出方法，可自由改），传递「是否显式」信号
+  # M2 P0-4 缓存实现（TDD：并发正确性测试先行，红 → 实现 → 绿）
   # ─────────────────────────────────────────────────────────────
-  - id: fix-p0-1-resolvesheetname
-    title: "P0-1 修复 resolveSheetName 对显式拼错 sheet 名的静默回退"
+  - id: opt-p0-4-field-cache
+    title: "P0-4 字段元数据缓存 + header→index 索引 + 并发安全"
     track: backend
     description: >
-      根因：resolveSheetName(reader.go:119-127) 对「name 非空但 sheet 不存在」一律回退首 sheet。
-      对显式通过 WithSheetName 提供、但拼错的 name，静默导入首 sheet，错数据难排查。
-      已确认约束：TestImport 依赖 default(name="Sheet1")→首 sheet「文本类字段」的回退
-      （全量字段.xlsx 首 sheet 是「文本类字段」，Sheet1 不存在，靠回退正确导入）。
-      该 default 回退承载「默认指任意首 sheet」语义，必须保留。
-      修复方案：resolveSheetName 增加一个 explicit bool 参数（未导出方法，改签名不影响导出 API）。
-      仅当 explicit==true 且 name != defaultSheetName 且 sheet 不存在时返回错误
-      （excelize.ErrSheetNotExist{SheetName: name}，值类型，带 SheetName 字段）；
-      其余场景（default name / name 为空 / sheet 存在）行为不变，仍回退首 sheet。
-      调用点 importer.go:55 与 97 的 default 分支已能判断「是否显式」：name 初始化为 defaultSheetName，
-      仅当 f 实现 WithSheetName 且覆写后才是显式（f.(WithSheetName) 成立即显式）。
-    depends_on:
-      - fix-p0-2-islengtherror
-    affected_files:
-      - path: reader.go
-        action: update
-      - path: importer.go
-        action: update
-      - path: errors_test.go
-        action: update
+      按 reflect.Type 包级缓存 parse 结果（[]field，sync.Map），消除每行重复 parse 反射；
+      scanSlice 层构建 header→index 映射（map[string]int，首个写定保留『第一个匹配』语义），
+      内层线性查找改 O(1)。TDD：先写并发正确性测试（-race）确认失败，再实现。
+      缓存生命周期见架构文档 §2.1（字段缓存全局 / header 索引 per-sheet）。缓存值结构 §2.2
+      （[]field 直存，复用原 parse 而非另写 parseType，§2.4 第 4 条）。
     must_read:
-      - path: reader.go
-        why: "119-127 行 resolveSheetName 与 firstSheetName(108-117)/sheetExists(96-105) 是改签名与错误构造的依据"
-      - path: importer.go
-        why: "41-81 Import 与 83-148 ImportConcurrent 的 default 分支（50-62 / 91-104）是唯一调用点；WithMultipleSheets 分支(63-78/110-145)不走 resolveSheetName，勿误改"
-      - path: excel.go
-        why: "7 行 defaultSheetName 常量 + 27-29 行 WithSheetName 接口，判断『显式』的依据"
-      - path: importer_test.go
-        why: "TestImport(76-108) 依赖 default→首 sheet 回退，修复后必须仍然通过"
+      - docs/architecture-optimization-implementation.md      # §2 缓存架构 + §2.5 门槛
+      - scanner.go                                            # fillStruct(117)/scanSlice(360) 现有逻辑
+      - column.go                                             # parse(37)/field(20) 解析规则
+      - importer.go                                           # ImportConcurrent(85) 并发路径
     pattern_ref:
-      - path: reader.go
-        lines: "119-127"
-        note: "改 resolveSheetName 签名，增加 explicit 信号并构造 ErrSheetNotExist"
-      - path: importer.go
-        lines: "50-62"
-        note: "Import default 分支：name 初始化 defaultSheetName，f.(WithSheetName) 成立才算显式"
+      - "包级 var fieldCache sync.Map；LoadOrStore 首次写、Load 后续读"
+      - "parseCached(t reflect.Type) 构造 reflect.New(t).Elem() 复用原 parse(v)"
+      - "scanSlice 构建 headerIdx := map[string]int，首个写定保留 break 语义"
+      - "并发测试用 goroutine + sync.WaitGroup 对同一 fieldCache 并发 FillStruct，-race 跑"
     gotcha:
-      - "WithMultipleSheets 分支（Import 63-78 / ImportConcurrent 110-145）直接以 map key 或 WithSheetName 覆写 name 当 sheet 名传入 imp，不经过 resolveSheetName，本次修复不触及，不要顺带改成走 resolveSheetName（那会引入新的回退语义）"
-      - "default name（defaultSheetName=\"Sheet1\"）不存在→回退首 sheet 的语义必须原样保留，任何修复都不得让 TestImport 失败"
-      - "excelize.ErrSheetNotExist 是值类型 struct { SheetName string }，直接返回 excelize.ErrSheetNotExist{SheetName: name}，勿返回指针"
-      - "resolveSheetName 是未导出方法（小写 r），改签名安全；reader 类型本身未导出，外部无引用"
-      - "IsSheetNotExistError(40-42) 已用 errors.As(v.Err, &excelize.ErrSheetNotExist{})，返回该错误值时能被正确识别，无需改 IsSheetNotExistError"
+      - "缓存必须包级，禁放 FieldMapper 实例字段（newScanner 每 sheet 新建实例，缓存会失效）——架构 §1.4"
+      - "header→index 首个写定，避免 map 后写覆盖破坏原『第一个匹配』语义——架构 §2.4 第 3 条"
+      - "复用原 parse 而非另写 parseType，避免双实现语义漂移——架构 §2.4 第 4 条"
+      - "不改 applyFieldRule 的 FieldByName 反射（本轮范围仅 parse + header 查找）"
     tests:
-      - name: "TestResolveSheetName_ExplicitMissingSheet（先失败）"
-        failing_before: true
-        assertion: >
-          r := &reader{file: 含 sheet 列表不含 userSheet 的 excelize.File}（或用 firstSheetName 语义构造含首 sheet 的临时 xlsx）；
-          _, err := r.resolveSheetName("userSheet", true) 断言 err 非 nil 且 errors.As(err, &excelize.ErrSheetNotExist{}) 成立。
-          修复前 resolveSheetName 无 explicit 参数、静默回退，测试无法编译/失败。
-      - name: "TestResolveSheetName_DefaultFallback（回归锁定）"
-        failing_before: false
-        assertion: >
-          r.resolveSheetName(defaultSheetName, false) 返回首 sheet 名且 err==nil；r.resolveSheetName("", false) 同回退首 sheet。
-          锁定 default/空名回退语义不变。
-      - name: "TestResolveSheetName_ExplicitExistingSheet"
-        failing_before: false
-        assertion: >
-          r.resolveSheetName(存在的 sheet 名, true) 返回同名且 err==nil。
+      - "新增并发正确性测试（多 goroutine 共用 fieldCache，-race 通过）——PRD §5 第 4 条"
+      - "新增缓存隔离测试（SelectColumnRow vs TextColumnRow 互不串扰）——§5 第 5 条"
+      - "新增缓存透明测试（同类型多次导入结果一致）——§5 第 6 条"
+      - "现有 17 测试继续全绿（含 -race）"
     validate:
-      - cmd: "go test ./... -run 'TestResolveSheetName' -v"
-        expect: "新增复现测试先失败（签名缺失/静默回退），修复后通过"
-      - cmd: "go test ./... -run TestImport -v"
-        expect: "TestImport 仍通过（default→首 sheet 回退语义未被破坏，锁定红线）"
-      - cmd: "go test ./..."
-        expect: "全部测试通过"
-      - cmd: "go vet ./..."
-        expect: "无输出"
-    acceptance_criteria:
-      - "resolveSheetName 增加显式信号参数，仅显式+非默认+不存在时返回 excelize.ErrSheetNotExist{SheetName: name}"
-      - "default name 与空名回退首 sheet 语义不变（TestImport 通过）"
-      - "TestResolveSheetName_ExplicitMissingSheet 修复前失败、修复后通过"
-      - "无导出 API 签名变更"
+      - go test ./...
+      - go test ./... -race
+      - go vet ./...
 
   # ─────────────────────────────────────────────────────────────
-  # P0-3：行为收紧，风险最高，串行最后执行，并附 benchmark 回归
+  # M3 P1×5 代码质量清理（纯重构，17 测试为安全网）
   # ─────────────────────────────────────────────────────────────
-  - id: fix-p0-3-converttotype
-    title: "P0-3 修复 ConvertToType 类型不匹配静默填零值 + 未知类型 panic"
+  - id: opt-p1-code-quality
+    title: "P1-1~P1-5 代码质量清理（吞错修正/重复抽取/死类型标注/死字段删除/sqref 抽取）"
     track: backend
     description: >
-      根因：ConvertToType(scanner.go:16-38) 用 cast.ToInt/ToBool 等强转，类型不匹配静默填零值
-      （实测 cast.ToInt("abc")==0、cast.ToBool(nil)==false）；default 分支(33-37)对未知类型一律
-      cast.ToString 返回 string，applyFieldRule(142-143) 直接 fieldValue.Set(convertedValue)，
-      目标字段非 string 时 panic。
-      用户已拍板：硬报错策略（不提供宽松开关）。转换前做类型可赋值性检查，不匹配返回带字段名+
-      期望类型+实际值的错误；default 兜底分支不再盲目 ToString，改为明确错误。
-      架构约束（关键决策）：ConvertToType 是导出方法（TypeConverter 导出类型），其签名
-      `ConvertToType(targetType reflect.Type, value any) reflect.Value` 不能加 error 返回（红线）。
-      因此错误检查落点在未导出的 applyFieldRule(scanner.go:102)，可自由改（它已返回 error）。
-      语义决策（关键，避免破坏现有测试）：空字符串/空单元格视为「缺值」，填零值不报错；
-      仅「非空且无法解析/转换」才报错。已核实 test/a.xlsx 模板配置 sheet 的 int 字段（Type/Selected/
-      Required 等）存在大量空单元格（如 B7-14 无 v），空值豁免是 TestRelation 不挂的前提。
-      实现落点：
-        (1) 新增未导出严格转换函数（如 convertToTypeStrict(fieldName string, t reflect.Type, v string) (reflect.Value, error)）：
-            对 int/int64/float64/bool 用 strconv.Parse* 显式解析，失败返回错误；对 string 直接返回；
-            对空串返回目标类型零值（豁免）；对不支持类型（struct/slice/ptr/interface）返回明确错误。
-        (2) applyFieldRule 的常规赋值路径(141-144)与 default 赋值路径(112-115)改用 strict 版本，
-            错误返回带字段名+期望类型+实际值。
-        (3) ConvertToType(导出)保留签名不破坏，但 default 分支不再盲目 ToString——统一走 strict 语义
-            或保留但路径已被 applyFieldRule 的 strict 检查兜底（不再被常规赋值路径调用）。
-      注意 split 分支(123-134)与 relation 分支(136-139)已各自 return，不受影响，勿改。
-    depends_on:
-      - fix-p0-1-resolvesheetname
-    affected_files:
-      - path: scanner.go
-        action: update
-      - path: scanner_test.go
-        action: create
-      - path: readme.md
-        action: update
+      P1-1 reader.close 改返回 error，Import/ImportConcurrent 合并 closeErr（路径 B，架构 §3.1）；
+      P1-2 抽 importSingle/sheetNameFor（架构 §3.2，闭包捕获注意）；
+      P1-3 ExcelLineError/LinesError 加 Deprecated 标注 + 删 Line 字段/注释代码 + InvalidUnmarshalError 前缀修正（架构 §3.3）；
+      P1-4 删 field.encoding 与注释代码；P1-5 抽 expandSqref。全部以现有 17 测试为安全网。
     must_read:
-      - path: scanner.go
-        why: "16-38 ConvertToType（根因）、102-145 applyFieldRule（赋值落点）、123-134 split 分支、136-139 relation 分支（豁免区）"
-      - path: column.go
-        why: "field.typ/deft/ignored 结构理解，deft 来自 tag 是 string，default 赋值(112-115)也走 ConvertToType"
-      - path: errors.go
-        why: "参考错误类型构造范式（带上下文），新增类型转换错误统一风格"
-      - path: importer_test.go
-        why: "TextColumnRow/SelectColumnRow 标签模型（default:1/default:3/split）确认 default 与 split 分支语义；TestRelation 的 int 字段是隐性依赖风险点"
-      - path: benchmark_test.go
-        why: "BenchmarkImport/BenchmarkFillStruct 是热路径回归基准，修复后需对比"
+      - docs/architecture-optimization-implementation.md      # §3 P1×5 实现要点
+      - reader.go                                             # close(89) 与 GetHeader closeErr 模式(68-72)
+      - importer.go                                           # Import(41)/ImportConcurrent(85) 重复分支
+      - errors.go                                             # ExcelLineError(105)/LinesError(115)/InvalidUnmarshalError(12)
+      - column.go                                             # field.encoding(24)/注释块(49-51,63)
+      - exporter.go / dataValidate.go                         # sqref 展开两处(82-85/85-89)
     pattern_ref:
-      - path: scanner.go
-        lines: "16-38"
-        note: "ConvertToType 各 cast 分支与 default 兜底 ToString（需要改的根因）"
-      - path: scanner.go
-        lines: "102-145"
-        note: "applyFieldRule 赋值路径：default(112-115)、split(123-134)、relation(136-139)、常规(141-144)"
+      - "reader.close() error 返回；Import 具名返回值 + defer 闭包合并 closeErr（err==nil 时覆盖）"
+      - "sheetNameFor 返回 (name, explicit)；importSingle 复用；goroutine 已显式传参保持"
+      - "Deprecated 注释英文：'// Deprecated: this type has no remaining trigger point...'"
+      - "expandSqref(ref string) (from, to string)；两处调用点拼回各自尾随语义"
     gotcha:
-      - "ConvertToType 是导出方法，签名不能加 error 返回；错误检查必须落在未导出的 applyFieldRule 或新增未导出 strict 函数"
-      - "空字符串/空单元格必须豁免（填零值不报错），否则 test/a.xlsx 模板配置/项配置/项字典的 int 字段大量空单元格会让 TestRelation 失败"
-      - "split 分支(123-134)与 relation 分支(136-139)已提前 return，不要动；slice/struct/pointer 等复合类型字段走 relation/split，不会进常规赋值"
-      - "default 赋值(112-115)的 deft 来自 tag 字符串（如 default:1），对 int64 字段 cast 转 int64 是正常路径，严格转换需保证 '1'→int64 正常通过"
-      - "readme.md 需同步说明行为变更：类型不匹配从『静默填零值』改为『返回错误』；空值仍填零值"
-      - "测试禁连生产库、用标准库 testing+reflect.DeepEqual，不引入 testify（project.md 红线）"
+      - "P1-1 签名红线：Importer.Close() 签名不变（无返回），只改未导出 reader.close"
+      - "P1-3 删 ExcelLineError.Line 前 grep 全库确认无引用（架构 §3.3）"
+      - "P1-2 goroutine 闭包不引入 name/n 循环变量捕获竞态"
+      - "InvalidUnmarshalError 只改前缀不改分支逻辑（架构 §3.3）"
     tests:
-      - name: "TestConvertToType_TypeMismatchErrors（先失败）"
-        failing_before: true
-        assertion: >
-          对 int64 目标字段 cellValue=\"abc\"：FillStruct/applyFieldRule 级别应返回非 nil 错误，
-          错误信息含字段名+期望类型 int64+实际值 abc。修复前静默填 0 不报错，断言失败。
-      - name: "TestConvertToType_UnknownTypeErrors（先失败）"
-        failing_before: true
-        assertion: >
-          对 struct/slice/ptr 目标字段（非 relation/split 场景）直接走常规赋值路径时，应返回明确错误而非
-          cast.ToString 后 Set panic。修复前会 panic 或静默填 string。
-      - name: "TestConvertToType_EmptyValueZeroValue（回归锁定）"
-        failing_before: false
-        assertion: >
-          空字符串 cellValue 对 int64/string 字段填零值不报错（锁定空值豁免语义，保护 TestRelation 空单元格）。
-      - name: "TestConvertToType_ValidConversion"
-        failing_before: false
-        assertion: >
-          合法数字字符串 \"123\"→int64、\"1.5\"→float64、\"true\"→bool 正常转换通过（锁定解析式转换正确路径）。
-    benchmark_regression:
-      baseline_ref: "docs/optimization-analysis.md §3.1 三档 ns/op（Import 1e5≈3.82s / FillStruct 1e5≈199ms）"
-      compare:
-        - cmd: "go test ./... -run=^$ -bench='BenchmarkImport$|BenchmarkFillStruct$' -benchmem -benchtime=3x -count=3"
-          expect: "与 base 基线同量级（±20% 内），无显著回退；strconv 解析相较 cast 强转不应引入可感知性能损失"
+      - "现有 17 测试全绿（含 -race）作为重构安全网——PRD §5 第 12-15 条"
     validate:
-      - cmd: "go test ./... -run 'TestConvertToType' -v"
-        expect: "复现测试先失败（静默填零值/panic），修复后通过"
-      - cmd: "go test ./... -run 'TestImport|TestRelation' -v"
-        expect: "TestImport 与 TestRelation 仍通过（空值豁免 + default/split 语义未破坏）"
-      - cmd: "go test ./..."
-        expect: "全部测试通过"
-      - cmd: "go vet ./..."
-        expect: "无输出"
-      - cmd: "go test ./... -run=^$ -bench='BenchmarkImport$|BenchmarkFillStruct$' -benchmem -benchtime=3x -count=3"
-        expect: "benchmark 无显著回退（对比 docs/optimization-analysis.md 基线）"
-    acceptance_criteria:
-      - "类型不匹配（非空、无法解析）返回带字段名+期望类型+实际值的错误；不再静默填零值"
-      - "未知类型不再 panic 或盲目 ToString，返回明确错误"
-      - "空值填零值语义保留（TestRelation 空单元格不挂）"
-      - "ConvertToType 导出签名不变；split/relation 分支行为不变"
-      - "readme.md 补充行为变更说明"
-      - "BenchmarkImport/BenchmarkFillStruct 无显著回退"
+      - go test ./...
+      - go test ./... -race
+      - go vet ./...
+
+  # ─────────────────────────────────────────────────────────────
+  # M4 benchmark 对比（after 采集 + 对比表 + 门槛判定）
+  # ─────────────────────────────────────────────────────────────
+  - id: opt-m4-benchmark
+    title: "M4 benchmark 对比：采集 after 数据 + 产出对比表 + 门槛判定"
+    track: backend
+    description: >
+      用与 M1 相同命令与 Go 版本（go1.26.4）采集 after 数据，3 档 × count=3 取中位数，
+      产出 before/after 对比表并判定 P0-4 达标门槛：
+      BenchmarkFillStruct 提速 ≥60% 且 allocs/op ≤10 行均摊；
+      BenchmarkImport 提速 ≥8% 且 allocs/op 不升；
+      ImportConcurrent/ScanSlice/FillStruct/Relation 无回退。
+    must_read:
+      - docs/architecture-optimization-implementation.md      # §2.5 门槛数值与规范
+      - docs/optimization-analysis.md                         # §3.1 基线数据
+    pattern_ref:
+      - "go test -run '^$' -bench 'Benchmark(FillStruct|Import|ImportConcurrent|ScanSlice|Relation)$' -benchtime=1s -count=3 -benchmem ./..."
+    gotcha:
+      - "after 与 M1 before 必须同版本（go1.26.4）同参数采集，否则不具可比性"
+      - "对比表标注 Go 1.26.4 采集 vs go.mod 1.23.3"
+      - "门槛判定给明确 PASS/FAIL，不达标回报，不静默通过"
+    tests:
+      - "benchmark 对比表（3 档 × 中位数）+ 门槛判定"
+    validate:
+      - go test ./...
+      - go vet ./...
 
 dispatch:
   - agent: devflow-backend-dev
-    cwd: /Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-three-p0-correctness-bugs-bc2528
     task_ids:
-      - fix-p0-2-islengtherror
-      - fix-p0-1-resolvesheetname
-      - fix-p0-3-converttotype
-    boundary: >
-      允许修改（仅限）：errors.go、reader.go、scanner.go、importer.go、readme.md；
-      允许新增：errors_test.go、scanner_test.go。
-      严禁修改：exporter.go、column.go、excel.go、func.go、style.go、dataValidate.go（本 task 不涉及）；
-      严禁修改：importer_test.go、reader_test.go、exporter_test.go、benchmark_test.go（现有测试与基准，只读）；
-      严禁改动：test/ 下全部 xlsx 夹具（a.xlsx / xxx.xlsx / 全量字段.xlsx）；
-      严禁修改：.devflow/ 下任何配置（rules/redlines/task.yaml/scope.yaml）、go.mod、go.sum；
-      严禁引入 testify 或任何新依赖；严禁改已导出 API 签名与 xlsx: 标签语法。
+      - opt-m1-baseline-lock
+      - opt-p0-4-field-cache
+      - opt-p1-code-quality
+      - opt-m4-benchmark
+    boundary:
+      allowed_files:
+        - scanner.go
+        - importer.go
+        - reader.go
+        - errors.go
+        - column.go
+        - exporter.go
+        - dataValidate.go
+        - readme.md            # 可选，仅 P1-3 附带说明同步（PRD §5 第 18 条）
+      allow_new_test_files: true
+        # 新增 *_test.go（scanner_test.go 增补缓存测试函数、必要时新增并发测试文件）
+      forbidden_files:
+        - go.mod
+        - go.sum
+        - test/**               # 夹具 xxx.xlsx 等，严禁删改
+        - v1/**
+      forbidden_actions:
+        - "不得修改既有测试函数（只可新增 *_test.go 增补新函数）"
+        - "不得新增第三方依赖"
+        - "不得修改任何已导出 API 签名"
+        - "不得修改 xlsx: 标签解析语义与中文列名文案"
 
-memorant_recall_query:
-  - "Go errors.As 值/指针 target 陷阱 指针 error 配值 target 恒 false"
-  - "go-excelize scanner TypeConverter cast 强转 静默填零值"
-  - "go-excelize resolveSheetName 静默回退 首 sheet"
-  - "go-excelize type conversion strconv parse 严格类型转换"
+memorant_recall_query: >
+  go-excelize parse 反射缓存 reflect.Type sync.Map header 索引 并发安全 field 元数据
+  benchmark FillStruct allocs 优化 死类型 Deprecated close 吞错
+
+methodology:
+  tdd: "P0-4 并发正确性测试先行（-race 先红后绿）；P1×5 以 17 测试为安全网先锁行为再重构"
+  benchmark: "3 档 × count=3 中位数，夹具 ResetTimer 前，标注 Go 1.26.4 vs go.mod 1.23.3"
+  validate: "go test ./... + go vet ./...；P0-4 task 加 -race；M4 加 benchmark 命令与门槛判定"

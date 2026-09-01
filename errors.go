@@ -15,13 +15,13 @@ type InvalidUnmarshalError struct {
 
 func (e *InvalidUnmarshalError) Error() string {
 	if e.Type == nil {
-		return "json: Unmarshal(nil)"
+		return "excelize: cannot unmarshal nil"
 	}
 
 	if e.Type.Kind() != reflect.Pointer {
-		return "json: Unmarshal(non-pointer " + e.Type.String() + ")"
+		return "excelize: cannot unmarshal non-pointer " + e.Type.String()
 	}
-	return "json: Unmarshal(nil " + e.Type.String() + ")"
+	return "excelize: cannot unmarshal nil " + e.Type.String()
 }
 
 type ValidateHeaderError struct {
@@ -102,16 +102,18 @@ func (m MultipleSheetError) Error() string {
 	return strings.TrimSpace(buff.String())
 }
 
+// Deprecated: this type has no remaining trigger point in the library; it is
+// a leftover from an earlier version. Do not use it in new code.
 type ExcelLineError struct {
-	Line []string `json:"lines"`
-	Err  error    `json:"err"`
+	Err error `json:"err"`
 }
 
 func (e ExcelLineError) Error() string {
 	return e.Err.Error()
-	//return fmt.Sprintf("%s: 第%s行", strings.ReplaceAll(e.Err.Error(), "\n", ","), strings.Join(e.Line, ","))
 }
 
+// Deprecated: this type has no remaining trigger point in the library; it is
+// a leftover from an earlier version. Do not use it in new code.
 type LinesError []ExcelLineError
 
 func (ee LinesError) Error() string {
