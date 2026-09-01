@@ -2,35 +2,48 @@ package excelize
 
 import (
 	"context"
+	"fmt"
 	"mime/multipart"
 	"strings"
+	"sync"
 )
 
 type Importer struct {
 	ctx    context.Context
-	reader reader
+	reader *reader
 }
 
-func NewImporterAsPath(ctx context.Context, path string) Importer {
-	return Importer{
-		ctx:    ctx,
-		reader: newReaderOfPath(path),
+func NewImporterAsPath(ctx context.Context, path string) (Importer, error) {
+	r, err := newReaderOfPath(path)
+	if err != nil {
+		return Importer{}, fmt.Errorf("new importer from path %s: %w", path, err)
 	}
+
+	return Importer{ctx: ctx, reader: r}, nil
 }
 
-func NewImporterAsFile(ctx context.Context, file multipart.File) Importer {
-	return Importer{
-		ctx:    ctx,
-		reader: newReader(file),
+func NewImporterAsFile(ctx context.Context, file multipart.File) (Importer, error) {
+	r, err := newReader(file)
+	if err != nil {
+		return Importer{}, fmt.Errorf("new importer from file: %w", err)
 	}
+
+	return Importer{ctx: ctx, reader: r}, nil
 }
 
 func (i Importer) Close() {
+	if i.reader == nil {
+		return
+	}
 	i.reader.close()
 }
 
 func (i Importer) Import(e Excel) error {
 	defer i.Close()
+
+	if i.reader == nil {
+		return fmt.Errorf("reader is not initialized")
+	}
 
 	switch f := e.(type) {
 	default:
@@ -39,7 +52,12 @@ func (i Importer) Import(e Excel) error {
 			name = n.SheetName()
 		}
 
-		if err := i.imp(f, name); err != nil {
+		resolved, err := i.reader.resolveSheetName(name)
+		if err != nil {
+			return err
+		}
+
+		if err := i.imp(f, resolved); err != nil {
 			return err
 		}
 	case WithMultipleSheets:
@@ -65,6 +83,10 @@ func (i Importer) Import(e Excel) error {
 func (i Importer) ImportConcurrent(e Excel, workers int) error {
 	defer i.Close()
 
+	if i.reader == nil {
+		return fmt.Errorf("reader is not initialized")
+	}
+
 	switch f := e.(type) {
 	default:
 		name := defaultSheetName
@@ -72,33 +94,43 @@ func (i Importer) ImportConcurrent(e Excel, workers int) error {
 			name = n.SheetName()
 		}
 
-		if err := i.imp(f, name); err != nil {
+		resolved, err := i.reader.resolveSheetName(name)
+		if err != nil {
+			return err
+		}
+
+		if err := i.imp(f, resolved); err != nil {
 			return err
 		}
 	case WithMultipleSheets:
+		if workers <= 0 {
+			workers = 1
+		}
+
 		sheets := f.Sheets()
 		errChan := make(chan error, len(sheets))
 		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
 
 		for n, s := range sheets {
+			name := n
 			if sheet, ok := f.(WithSheetName); ok {
-				n = sheet.SheetName()
+				name = sheet.SheetName()
 			}
 
-			sem <- struct{}{} // 限制并发数
-			go func(name string, sheet Sheet) {
-				defer func() { <-sem }()
-				if err := i.imp(sheet, name); err != nil {
-					errChan <- newSheetError(n, err)
-				}
-			}(n, s)
-		}
-
-		// 等待所有goroutine完成
-		for i := 0; i < cap(sem); i++ {
+			wg.Add(1)
 			sem <- struct{}{}
+			go func(name string, sheet Sheet) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				if err := i.imp(sheet, name); err != nil {
+					errChan <- newSheetError(name, err)
+				}
+			}(name, s)
 		}
 
+		wg.Wait()
 		close(errChan)
 
 		var errors MultipleSheetError
@@ -131,7 +163,7 @@ func (i Importer) imp(e Sheet, name string) error {
 		i.reader.withSkip(s.Skip(name))
 	}
 
-	s := &scanner{reader: i.reader, sheet: name}
+	s := newScanner(i.reader, name)
 
 	if r, ok := e.(WithRows); ok {
 		if err := s.scan(r.SheetRows()); err != nil {

@@ -1,0 +1,359 @@
+# .devflow/scope.yaml
+work_type: feature          # 分析型 task，但按 feature 模式出技术方案 + scope
+tracks:
+  - implementation          # 读源码 + 写 benchmark + 写报告的执行轨道
+  - testing                 # 新增 *_bench_test.go 基线（数据采集）
+
+affected:
+  backend:
+    files:
+      - path: importer.go
+        reason: "分析对象：导入链路入口（Import/ImportConcurrent），性能与正确性维度的 Close/defer 审查点"
+      - path: exporter.go
+        reason: "分析对象：导出链路（Export），writeData 逐行写出热路径审查"
+      - path: reader.go
+        reason: "分析对象：reader 层（GetHeader/GetRows/close），资源释放与 skip 逻辑审查"
+      - path: scanner.go
+        reason: "分析对象：scanSlice 热路径 + TypeConverter/FieldMapper/RelationResolver 映射反射逻辑"
+      - path: column.go
+        reason: "分析对象：xlsx: 标签解析（parse/parseTag），API 设计维度一致性矩阵核心"
+      - path: style.go
+        reason: "分析对象：Style 薄封装，readme vs 实际签名差异核对"
+      - path: dataValidate.go
+        reason: "分析对象：DataValidate 薄封装，readme vs 实际签名差异核对"
+      - path: errors.go
+        reason: "分析对象：错误类型族 + 注释掉死代码（ExcelLineError.Error 等），代码质量维度重点"
+      - path: func.go
+        reason: "分析对象：ColumnNumberToName 薄封装"
+      - path: excel.go
+        reason: "分析对象：接口定义与空接口（Excel/Rows/Sheet），使用优雅性维度对比基线"
+      - path: importer_test.go
+        reason: "分析对象：现有用法证据（结构体+接口约定式），readme 核对与优雅性对比基线"
+      - path: reader_test.go
+        reason: "分析对象：reader 层测试覆盖度核对"
+      - path: exporter_test.go
+        reason: "分析对象：导出用法证据，readme 签名核对"
+      - path: readme.md
+        reason: "分析对象：文档宣称锚点，readme vs 实际行为差异清单"
+    new_files:
+      - path: benchmark_test.go
+        reason: "新增性能基线（可复现资产），3 档规模导入/导出/micro benchmark"
+      - path: docs/optimization-analysis.md
+        reason: "唯一正式交付物：分析报告"
+
+contract_changes: false     # 冻结契约，无 API/标签变更
+contract_files: []
+risk_level: medium          # 多文件全库分析 + benchmark 环境噪声 + 报告行号漂移
+parallelizable: false       # 性能维度分析（M3）依赖 benchmark 数据（M2），串行
+dependency_order:
+  - implementation          # 先执行分析（含 benchmark 数据采集），testing 产物随 analysis-2 一并产出
+
+tasks:
+  - id: analysis-1
+    title: "M1 现状梳理：全库通读 + 标签/API 一致性矩阵"
+    track: implementation
+    description: >
+      通读全部 10 个源文件（importer/exporter/reader/scanner/column/style/dataValidate/errors/func/excel）、
+      3 个测试文件与 readme.md，建立：(1) 导入链路单向依赖关系图（Importer→scanner→reader→FieldMapper→RelationResolver）
+      是否被破坏；(2) xlsx: 标签一致性矩阵（name/split/relation/default/- 五个标签 → 导入支持 / 导出支持）；
+      (3) readme 宣称的接口签名 vs excel.go 实际接口签名差异初筛（已知高信号：Style()/DataValidation()
+      返回类型、Collection() ctx 参数漂移、值/指针接收者）；(4) 全库 Close/defer 点清单（用于正确性维度）。
+      产出为中间笔记（可写入 .devflow/ 临时文件或直接作为 analysis-3 的素材），不写最终报告。
+    depends_on: []
+    affected_files:
+      - path: importer.go
+        action: update
+      - path: exporter.go
+        action: update
+      - path: reader.go
+        action: update
+      - path: scanner.go
+        action: update
+      - path: column.go
+        action: update
+      - path: style.go
+        action: update
+      - path: dataValidate.go
+        action: update
+      - path: errors.go
+        action: update
+      - path: func.go
+        action: update
+      - path: excel.go
+        action: update
+      - path: importer_test.go
+        action: update
+      - path: reader_test.go
+        action: update
+      - path: exporter_test.go
+        action: update
+      - path: readme.md
+        action: update
+    must_read:
+      - path: excel.go
+        why: "接口定义与空接口是全库契约锚点，先读建立心智模型"
+      - path: importer.go
+        why: "导入链路入口，理解 Import/ImportConcurrent 双入口与 imp 分发逻辑"
+      - path: scanner.go
+        why: "扫描/映射/关系解析的反射热路径，后续性能与优雅性分析的核心"
+      - path: column.go
+        why: "xlsx: 标签唯一解析处，标签一致性矩阵的构建来源"
+      - path: exporter.go
+        why: "导出链路，判断标签是否双侧支持、writeData 逐行写出"
+      - path: readme.md
+        why: "readme 差异清单的宣称侧锚点"
+      - path: importer_test.go
+        why: "现有调用形态（结构体+接口约定式）与 label 样例，优雅性对比基线"
+    pattern_ref:
+      - path: importer_test.go
+        lines: "13-63"
+        note: "TextColumnRow/SelectColumnRow 的结构体标签样例，benchmark 与标签矩阵复用"
+      - path: importer_test.go
+        lines: "52-58"
+        note: "ColumnExcel 实现 Sheets() 的接口约定范式，正确性/优雅性对比基线"
+    gotcha:
+      - "分析不产出最终报告，只产出素材（依赖图/矩阵/Close清单），避免与 analysis-5 重复劳动"
+      - "readme 与 excel.go 的接口签名有多处漂移（Style/DataValidation 返回类型、Collection ctx 参数），必须逐条比对不遗漏"
+      - "exporter.go 不解析 xlsx: 标签，标签一致性矩阵导出侧可能全为『不支持』，这是 API 设计维度的核心发现而非遗漏"
+      - "禁止在梳理阶段顺手重构或格式化任何源码"
+    validate:
+      - cmd: "go vet ./..."
+        expect: "无输出（静态检查通过，确认未误改源码）"
+      - cmd: "go test ./... -run TestImport -v"
+        expect: "现有测试通过（确认理解正确、未破坏基线）"
+    acceptance_criteria:
+      - "产出导入链路依赖关系图（文字形式），能说明单向依赖是否被破坏"
+      - "产出 xlsx: 标签一致性矩阵（5 标签 × 导入/导出两侧支持状态）"
+      - "产出 readme 接口签名 vs excel.go 实际签名差异初筛清单（≥3 条）"
+      - "产出全库 Close/defer 点清单（含文件:行）"
+
+  - id: analysis-2
+    title: "M2 性能基线：新增 benchmark_test.go 并跑 3 档规模数据"
+    track: testing
+    description: >
+      新增 benchmark_test.go（包内测试 package excelize，复用现有 TextColumnRow 结构体模型），
+      提供 3 档规模（百级 1e2 / 万级 1e4 / 十万级 1e5 行，8 列）的导入/导出端到端 benchmark
+      与白盒 micro benchmark。夹具在内存构造（excelize.NewFile + SetSheetRow），导入侧写入
+      b.TempDir() 临时文件复用，不新增夹具文件、不动 test/。测以下函数：
+      BenchmarkImport（全链路导入）、BenchmarkImportConcurrent（并发导入）、BenchmarkExport（全链路导出）、
+      BenchmarkScanSlice（scanner.scanSlice 白盒）、BenchmarkFillStruct（FieldMapper.FillStruct 白盒）、
+      BenchmarkRelation（关系解析专项）。运行 go test -bench 采集 ns/op、B/op、allocs/op，
+      -count=3 取稳定值，记录实测环境（Go 版本/机器）。数据写入临时采集笔记供 analysis-3 引用。
+      benchmark_test.go 保留在仓库作为可复现基线。
+    depends_on:
+      - analysis-1
+    affected_files:
+      - path: benchmark_test.go
+        action: create
+    must_read:
+      - path: importer_test.go
+        why: "复用 TextColumnRow 结构体标签模型与测试构造范式，保持包内测试一致"
+      - path: reader_test.go
+        why: "确认 reader 测试约定与包内测试命名风格"
+      - path: exporter_test.go
+        why: "确认导出侧构造范式（Sheet/FromCollection 接口实现）"
+      - path: scanner.go
+        why: "理解 scanSlice/FillStruct 签名以写白盒 micro benchmark"
+      - path: .devflow/rules/backend.md
+        why: "遵循测试约定：包内测试 package excelize、禁用 testify、标准库 testing"
+    pattern_ref:
+      - path: importer_test.go
+        lines: "96-108"
+        note: "NewImporterAsPath + Import 的调用范式，BenchmarkImport 复用"
+      - path: exporter_test.go
+        lines: "23-53"
+        note: "FromCollection(Rows) 接口实现 + NewExporter + Export 范式，BenchmarkExport 复用"
+    gotcha:
+      - "夹具生成不得计入被测计时：在 setup（非 b.ResetTimer 之前）生成，十万级生成耗时数十秒属正常"
+      - "十万级夹具内存可能紧张：若 OOM 优先降档或注明需独立内存采样，不可伪造数据"
+      - "benchmark 文件必须保留在仓库，禁止跑完删除"
+      - "禁止修改任何库源码、禁止改 go.mod/testify/新依赖"
+      - "切不可改动 test/*.xlsx 现有夹具"
+    validate:
+      - cmd: "go test ./... -run=^$ -bench='BenchmarkImport$|BenchmarkExport$' -benchmem -benchtime=1x"
+        expect: "benchmark 可编译运行，输出 ns/op、B/op、allocs/op 各档数据（非 panic）"
+      - cmd: "go test ./..."
+        expect: "全部测试通过（新增 benchmark 不影响现有测试）"
+      - cmd: "go vet ./..."
+        expect: "无输出"
+    acceptance_criteria:
+      - "benchmark_test.go 存在且可运行，含 ≥6 个 benchmark 函数（导入/并发导入/导出/scanSlice/fillStruct/relation）"
+      - "3 档规模（1e2/1e4/1e5）各档至少 1 组 ns/op + B/op + allocs/op 实测数据"
+      - "benchmark 文件保留在仓库，未改任何源码、未动 test/ 夹具、未加依赖"
+
+  - id: analysis-3
+    title: "M3 五维分析：性能/代码质量/API/正确性/优雅性逐一产出结论"
+    track: implementation
+    description: >
+      基于 analysis-1 素材 + analysis-2 的 benchmark 数据，按五个维度逐一产出分析结论。
+      (1) 性能：把 benchmark 数据绑定到具体代码环节（scanSlice 的 rv.Grow/SetLen、fillStruct 嵌套循环、
+      writeData 逐行 SetSheetRow、RelationResolver 全量缓存），定位瓶颈到文件:行，评估量级；
+      无 benchmark 数据的性能观察只能列『待测项』，不得进建议清单。
+      (2) 代码质量：重复代码（Import/ImportConcurrent 双份分发、多处 nil reader 守卫）、
+      吞错（close 里 `_ = r.file.Close()`）、死代码（column.go/errors.go 注释块），按 severity 分级并定位行。
+      (3) API 设计：完成标签一致性矩阵收尾 + readme 差异清单（逐条三元组）+ API 缺口排序。
+      (4) 正确性：边界条件（空表/缺列/类型不匹配/scanSlice 越界访问）逐项给『当前行为+是否bug+影响面』，
+      资源泄漏覆盖正常+错误路径、每个 Close/defer 标行。
+      (5) 使用优雅性：对 functional options / builder / 流式导入 / 泛型 / 减少样板 5 方向逐一
+      『现有用法 vs 提议用法』对比 + 收益成本 + 兼容性判定。本 task 产出五个维度的分析结论（可写入中间笔记），
+      供 analysis-4 汇总为建议清单。
+    depends_on:
+      - analysis-2
+    affected_files:
+      - path: docs/optimization-analysis.md
+        action: update
+      - path: importer.go
+        action: update
+      - path: exporter.go
+        action: update
+      - path: reader.go
+        action: update
+      - path: scanner.go
+        action: update
+      - path: column.go
+        action: update
+      - path: style.go
+        action: update
+      - path: dataValidate.go
+        action: update
+      - path: errors.go
+        action: update
+      - path: excel.go
+        action: update
+    must_read:
+      - path: scanner.go
+        why: "性能热点与反射映射逻辑，性能/正确性/优雅性三维交叉分析"
+      - path: importer.go
+        why: "Import/ImportConcurrent 重复分发 + Close 语义，代码质量与正确性"
+      - path: errors.go
+        why: "错误类型族与死代码，代码质量维度重点"
+      - path: readme.md
+        why: "readme 差异清单与优雅性『现有用法』对比基线"
+      - path: column.go
+        why: "标签解析单侧支持判定，API 设计维度"
+      - path: exporter.go
+        why: "导出侧不解析标签 + writeData 逐行写出，API 与性能维度"
+    pattern_ref:
+      - path: scanner.go
+        lines: "304-338"
+        note: "scanSlice 的 rv.Grow/SetLen 逐行扩容，性能瓶颈定位锚点"
+      - path: scanner.go
+        lines: "76-99"
+        note: "fillStruct 的嵌套 O(字段×表头) 循环，白盒性能热点"
+      - path: importer.go
+        lines: "41-148"
+        note: "Import 与 ImportConcurrent 的重复分发结构，代码质量『重复代码』锚点"
+    gotcha:
+      - "性能结论若无 benchmark 数据支撑，一律标『待测项』，宁缺毋滥（P0 第 4 条硬门槛）"
+      - "Location 必须精确到文件:行，无法定位行则给函数名，不得只写文件名"
+      - "所有建议默认出兼容方案；确需 breaking 的标注『供 v2 决策』且不作为主推"
+      - "优雅性方向未达门槛（样板减少 <30% 且无实质类型/性能收益）标注『供 v2 参考』，不进主推清单"
+      - "禁止据此实施任何优化，只产出分析"
+    validate:
+      - cmd: "go test ./..."
+        expect: "全部测试通过（分析阶段未破坏代码）"
+      - cmd: "go vet ./..."
+        expect: "无输出"
+    acceptance_criteria:
+      - "五维度均有明确『是否有优化空间』结论（不骑墙）"
+      - "性能维度每个结论绑定 benchmark 数据；无数据的观察列入待测项"
+      - "readme 差异清单每条为『readme宣称→实际行为→判定』三元组"
+      - "正确性维度资源泄漏覆盖正常+错误路径，每个 Close/defer 点标文件:行"
+
+  - id: analysis-4
+    title: "M4 建议清单：P0/P1/P2 排序 + 逐项兼容性判定"
+    track: implementation
+    description: >
+      汇总 analysis-3 五维结论，生成按优先级排序的优化建议清单（P0/P1/P2）。
+      每条建议字段完整：ID / 维度 / 优先级 / Location（文件:行）/ 问题描述 / 建议方案 /
+      风险与影响面 / 兼容性判定（兼容 or 需供 v2 决策，不得留空）/ 数据支撑（性能类必填 benchmark 数据）。
+      P0 判定标准：正确性 bug（资源泄漏、越界访问）、冻结契约内可低成本高收益的性能点；
+      P1：代码质量（吞错、重复代码）；P2：方向性改进（优雅性方向中达门槛者）。写出中间建议清单草稿。
+    depends_on:
+      - analysis-3
+    affected_files:
+      - path: docs/optimization-analysis.md
+        action: update
+    must_read:
+      - path: docs/prd-optimization-analysis.md
+        why: "§6.2 建议字段定义与 §7 验收标准，确保每条字段完整"
+      - path: .devflow/requirement-summary.md
+        why: "兼容性红线与『不实施优化』约束再确认"
+    pattern_ref:
+      - path: docs/prd-optimization-analysis.md
+        lines: "198-211"
+        note: "建议清单字段表格 + 待测项章节要求，作为报告骨架"
+    gotcha:
+      - "兼容性判定不得留空（P0 第 5 条）"
+      - "性能类建议必须带数据支撑字段，否则整条不能进清单"
+      - "每条 Location 属于 §4 范围的源文件，不得指向 test 夹具或 readme 之外"
+      - "不写 v2 具体设计，只标方向；breaking 建议不进主推"
+    validate:
+      - cmd: "go test ./..."
+        expect: "全部测试通过（确认未误改源码，分析仅读+写文档）"
+    acceptance_criteria:
+      - "建议清单按 P0/P1/P2 分组，每条覆盖全部必填字段"
+      - "每条 Location 精确到文件:行或函数名，且属于范围内源文件"
+      - "性能类建议均附 benchmark 数据支撑"
+      - "每条兼容性判定明确（兼容 / 需供 v2 决策），无留空"
+
+  - id: analysis-5
+    title: "M5 报告定稿：执行摘要 + 待测项 + 全量合并成稿"
+    track: implementation
+    description: >
+      将 analysis-1~4 产出合并为 docs/optimization-analysis.md 定稿，包含：
+      (1) 执行摘要（五维『是否有优化空间』一页结论 + 优化总优先级排序）；
+      (2) 按优先级排序的优化建议清单（来自 analysis-4）；
+      (3) 各维度详细分析（来自 analysis-3）；(4) 待测项/未覆盖项清单；
+      (5) benchmark 测试方法与实测数据附在性能章节。报告开头注明分析对应 base_commit 与工具链版本。
+      自检 P0 全部验收标准（§7 第 1-9 条）逐条通过。全程不改源码。
+    depends_on:
+      - analysis-4
+    affected_files:
+      - path: docs/optimization-analysis.md
+        action: update
+    must_read:
+      - path: docs/prd-optimization-analysis.md
+        why: "§6.2 报告结构 + §7 验收标准作为定稿自检清单"
+      - path: docs/architecture-optimization-analysis.md
+        why: "技术方案的 benchmark 设计与分析方法，保证报告与方案一致"
+    pattern_ref:
+      - path: docs/prd-optimization-analysis.md
+        lines: "194-220"
+        note: "报告核心结构 + 建议字段 + 质量约束，作为定稿骨架"
+    gotcha:
+      - "执行摘要五维结论必须明确（P1 第 13 条），不得骑墙"
+      - "报告仅含『分析+建议』，不得包含任何库源码改动（新增 benchmark 文件除外）"
+      - "报告标注实测 Go 版本（本机 1.26.4）与 go.mod 声明（1.23.3）的差异，避免数据复现歧义"
+      - "待测项/未覆盖项单独列出（P2 第 14 条，虽可选但建议补全）"
+    validate:
+      - cmd: "go test ./..."
+        expect: "全部测试通过（报告定稿未破坏任何代码）"
+      - cmd: "go vet ./..."
+        expect: "无输出"
+    acceptance_criteria:
+      - "docs/optimization-analysis.md 存在且结构完整（执行摘要/建议清单/五维详情/待测项/benchmark 数据）"
+      - "P0 验收标准第 1-9 条逐条可核查通过"
+
+dispatch:
+  - agent: devflow-backend-dev
+    cwd: /Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-analysis-b3707d
+    task_ids:
+      - analysis-1
+      - analysis-2
+      - analysis-3
+      - analysis-4
+      - analysis-5
+    boundary: >
+      只允许新增 *_bench_test.go 和 docs/optimization-analysis.md 两个交付物；
+      严禁修改任何库源码（importer/exporter/reader/scanner/column/style/dataValidate/errors/func/excel 等 .go 文件）；
+      严禁修改 .devflow/ 规则、redlines、task.yaml、scope.yaml 与 docs/prd-optimization-analysis.md；
+      严禁改动 test/ 下所有 xlsx 夹具；严禁修改 go.mod/go.sum；严禁引入 testify 或任何新依赖。
+
+memorant_recall_query:
+  - "go-excelize 导入导出性能 benchmark 基线"
+  - "go-excelize scanner reflect 映射热路径优化"
+  - "excelize SetSheetRow 逐行写出性能"
+  - "xlsx struct tag 单侧支持 / 标签一致性"
+  - "go 库接口约定式 API 泛型强类型重构"
+  - "excelize file Close 资源泄漏"

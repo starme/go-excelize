@@ -53,8 +53,12 @@ var e = ColumnExcel{
         "选项类字段": &SelectColumnSheet{},
     },
 }
-err := NewImporterAsPath("./test/全量字段.xlsx").Import(&e)
+importer, err := NewImporterAsPath("./test/全量字段.xlsx")
 if err != nil {
+    fmt.Println("create importer:", err)
+    return
+}
+if err := importer.Import(&e); err != nil {
     fmt.Println(err)
     return
 }

@@ -3,9 +3,11 @@ package excelize
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"reflect"
-	"talent-review/pkg/httpx/validation"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type SelectOption struct {
@@ -36,24 +38,10 @@ type TextColumnRow struct {
 }
 
 func (s SelectColumnSheet) Collection() error {
-	for _, row := range s {
-		//fmt.Println(row)
-		if err := validation.Validate(context.Background(), row); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 func (t TextColumnSheet) Collection(ctx context.Context) error {
-	for _, row := range t {
-		fmt.Println(row)
-		if err := validation.Validate(ctx, row); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -82,13 +70,6 @@ func (s SimpleExcel) SheetName() string {
 }
 
 func (s SimpleExcel) Collection(ctx context.Context) error {
-	for _, row := range s.rows {
-		fmt.Println(row)
-		if err := validation.Validate(ctx, row); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -113,11 +94,13 @@ func TestImport(t *testing.T) {
 	//	},
 	//}
 	var e []TextColumnRow
-	//var e = ColumnExcel{}
-	err := NewImporterAsPath(context.Background(), "./test/全量字段.xlsx").Import(&e)
+	importer, err := NewImporterAsPath(context.Background(), "./test/全量字段.xlsx")
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		t.Fatalf("failed to create importer: %v", err)
+	}
+
+	if err := importer.Import(&e); err != nil {
+		t.Fatalf("import failed: %v", err)
 	}
 
 	//fmt.Printf("%#v\n", e.SheetMap["选项类字段"])
@@ -169,9 +152,13 @@ type TermDictRow struct {
 
 func TestRelation(t *testing.T) {
 	var e = NewExcel()
-	err := NewImporterAsPath(context.Background(), "./test/a.xlsx").Import(&e)
+	importer, err := NewImporterAsPath(context.Background(), "./test/a.xlsx")
 	if err != nil {
-		t.Errorf("Import failed: %v", err)
+		t.Fatalf("failed to create importer: %v", err)
+	}
+
+	if err := importer.Import(&e); err != nil {
+		t.Fatalf("Import failed: %v", err)
 	}
 
 	fmt.Printf("%#v\n", e)
@@ -180,6 +167,84 @@ func TestRelation(t *testing.T) {
 		fmt.Printf("%#v\n", row.Terms)
 	}
 
+}
+
+type headerMismatchSheet struct {
+	name string
+}
+
+func (h headerMismatchSheet) SheetName() string {
+	return h.name
+}
+
+func (h headerMismatchSheet) Headers() []interface{} {
+	return []interface{}{"unexpected"}
+}
+
+type multiSheetExcel struct {
+	SheetMap map[string]Sheet
+}
+
+func (m multiSheetExcel) Sheets() map[string]Sheet {
+	return m.SheetMap
+}
+
+func TestImportConcurrentReportsAllSheets(t *testing.T) {
+	tmpPath := filepath.Join(t.TempDir(), "multiple.xlsx")
+	file := excelize.NewFile()
+	sheetNames := []string{"Sheet1", "Sheet2"}
+	for idx, name := range sheetNames {
+		if idx == 0 {
+			if err := file.SetSheetName("Sheet1", name); err != nil {
+				t.Fatalf("rename default sheet: %v", err)
+			}
+		} else {
+			if _, err := file.NewSheet(name); err != nil {
+				t.Fatalf("create sheet %s: %v", name, err)
+			}
+		}
+		if err := file.SetSheetRow(name, "A1", &[]interface{}{"Column1"}); err != nil {
+			t.Fatalf("write header to %s: %v", name, err)
+		}
+	}
+	if err := file.SaveAs(tmpPath); err != nil {
+		t.Fatalf("save excel file: %v", err)
+	}
+
+	importer, err := NewImporterAsPath(context.Background(), tmpPath)
+	if err != nil {
+		t.Fatalf("failed to create importer: %v", err)
+	}
+
+	excel := multiSheetExcel{SheetMap: map[string]Sheet{}}
+	for _, name := range sheetNames {
+		excel.SheetMap[name] = headerMismatchSheet{name: name}
+	}
+
+	err = importer.ImportConcurrent(excel, len(sheetNames))
+	if err == nil {
+		t.Fatalf("expected header validation errors")
+	}
+
+	multiErr, ok := err.(MultipleSheetError)
+	if !ok {
+		t.Fatalf("expected MultipleSheetError, got %T", err)
+	}
+
+	if len(multiErr) != len(sheetNames) {
+		t.Fatalf("expected %d sheet errors, got %d", len(sheetNames), len(multiErr))
+	}
+
+	seen := map[string]bool{}
+	for _, sheetErr := range multiErr {
+		seen[sheetErr.Sheet] = true
+	}
+
+	for _, name := range sheetNames {
+		if !seen[name] {
+			t.Fatalf("missing error for %s", name)
+		}
+	}
 }
 
 func TestReflect(t *testing.T) {

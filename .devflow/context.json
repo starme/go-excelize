@@ -1,0 +1,14 @@
+{
+  "task_id": "go-excelize-optimization-analysis-b3707d",
+  "run_id": "20260831-172458-a88601",
+  "project_root": "/Users/tal/projects/go/packages/go-excelize",
+  "task_root": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-analysis-b3707d",
+  "worktree": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-analysis-b3707d",
+  "branch": "feature/go-excelize-optimization-analysis-b3707d",
+  "base_commit": "44d31b1ac74631bb503eb4c1a2607770db05ae70",
+  "phase": "done",
+  "agent": "manager",
+  "adapter": "claude-code",
+  "adapter_capability": "hard",
+  "cwd": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-analysis-b3707d"
+}
