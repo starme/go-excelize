@@ -35,11 +35,16 @@ func (i Importer) Close() {
 	if i.reader == nil {
 		return
 	}
-	i.reader.close()
+	_ = i.reader.close()
 }
 
-func (i Importer) Import(e Excel) error {
-	defer i.Close()
+func (i Importer) Import(e Excel) (err error) {
+	defer func() {
+		// closeErr 仅当 err == nil 时覆盖，保留首要错误。
+		if closeErr := i.reader.close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	if i.reader == nil {
 		return fmt.Errorf("reader is not initialized")
@@ -47,21 +52,7 @@ func (i Importer) Import(e Excel) error {
 
 	switch f := e.(type) {
 	default:
-		name := defaultSheetName
-		explicit := false
-		if n, ok := f.(WithSheetName); ok {
-			name = n.SheetName()
-			explicit = true
-		}
-
-		resolved, err := i.reader.resolveSheetName(name, explicit)
-		if err != nil {
-			return err
-		}
-
-		if err := i.imp(f, resolved); err != nil {
-			return err
-		}
+		return i.importSingle(f)
 	case WithMultipleSheets:
 		var errors MultipleSheetError
 		for n, s := range f.Sheets() {
@@ -82,8 +73,34 @@ func (i Importer) Import(e Excel) error {
 	return nil
 }
 
-func (i Importer) ImportConcurrent(e Excel, workers int) error {
-	defer i.Close()
+// sheetNameFor 返回 sheet 的逻辑名与是否显式（WithSheetName 提供则显式）。
+// 仅用于单 sheet default 分支：缺省时回退 defaultSheetName。
+func (i Importer) sheetNameFor(e Excel) (name string, explicit bool) {
+	name = defaultSheetName
+	if n, ok := e.(WithSheetName); ok {
+		name = n.SheetName()
+		explicit = true
+	}
+	return
+}
+
+// importSingle 处理 default 分支：解析 sheet 名 + 单 sheet 导入。
+func (i Importer) importSingle(e Excel) error {
+	name, explicit := i.sheetNameFor(e)
+	resolved, err := i.reader.resolveSheetName(name, explicit)
+	if err != nil {
+		return err
+	}
+	return i.imp(e, resolved)
+}
+
+func (i Importer) ImportConcurrent(e Excel, workers int) (err error) {
+	defer func() {
+		// closeErr 仅当 err == nil 时覆盖，保留首要错误。
+		if closeErr := i.reader.close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 
 	if i.reader == nil {
 		return fmt.Errorf("reader is not initialized")
@@ -91,21 +108,7 @@ func (i Importer) ImportConcurrent(e Excel, workers int) error {
 
 	switch f := e.(type) {
 	default:
-		name := defaultSheetName
-		explicit := false
-		if n, ok := f.(WithSheetName); ok {
-			name = n.SheetName()
-			explicit = true
-		}
-
-		resolved, err := i.reader.resolveSheetName(name, explicit)
-		if err != nil {
-			return err
-		}
-
-		if err := i.imp(f, resolved); err != nil {
-			return err
-		}
+		return i.importSingle(f)
 	case WithMultipleSheets:
 		if workers <= 0 {
 			workers = 1

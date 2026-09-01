@@ -22,7 +22,6 @@ type field struct {
 	name     string
 	typ      reflect.Type
 	alias    string
-	encoding string
 	split    string
 	deft     any
 	ignored  bool
