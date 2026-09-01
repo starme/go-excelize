@@ -1,7 +1,7 @@
 # .devflow/scope.yaml
-# 第三轮实施 feature：P2 优雅性（P2-1 导出 Options + P2-2 NewSheet）+ gofmt 债清理
-# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属上一轮 P0-4+P1×5，已整体替换）
-# 技术方案见 docs/architecture-p2-export-ergonomics.md
+# v2 项实施 feature：P2-3 ImportStream 流式导入（P2-4 ImportOf 已在 GATE_ARCH 用户裁决放弃）
+# 本文件由架构 Agent 覆盖生成（原 scope.yaml 属上一轮 P2-1+P2-2，已整体替换）
+# 技术方案见 docs/architecture-v2-import-stream-generics.md
 
 work_type: feature
 tracks:
@@ -10,69 +10,92 @@ tracks:
 affected:
   backend:
     files:
-      - path: exporter.go
-        reason: "P2-1 落点：Exporter 加 config *exportConfig 字段；NewExporter 初始化空 config；createSheet(49-77) 三处改 sheet 级优先/导出级兜底；新增三 setXxxByMap 直取函数"
-      - path: excel.go
-        reason: "P2-1 落点：新增 ExportOption/exportConfig 类型 + NewExporterWithOptions/WithStyle/WithDataValidation/WithColumnWidths 导出符号（不改任何既有接口方法集）"
-      - path: style.go
-        reason: "承载 config.styles map[string]Style 的 Style 类型来源（复用，不改 Style 定义）；如需在此落 ExportOption 亦可，与 excel.go 二选一"
-      - path: dataValidate.go
-        reason: "承载 config.dataValidate map[string]DataValidate（复用，不改 DataValidate 定义）；如需在此落 Option 亦可"
+      - path: importer.go
+        reason: "P2-3 ImportStream 落点（新增 ImportStream 方法，复用 sheetNameFor/importSingle/imp 的 header+skip 前缀）。不改 Import/ImportConcurrent/sheetNameFor/importSingle/imp 既有函数体"
       - path: scanner.go
-        reason: "gofmt 债清理（T3）：唯一目的，纯空白/对齐/尾空行，语义零变化"
-      - path: readme.md
-        reason: "C6 文档化：新增 NewExporterWithOptions 三 Option + NewSheet 单/多 sheet 用法；连带修正 readme.md:101/114 既有返回类型漂移（map[string]*excelize.Style→map[string]Style、*DataValidation→DataValidate），修正后逻辑等价"
+        reason: "R1 复用红线：从 scanSlice 循环体抽出共享内核 fillOne（reader headerIdx+row+dst → fillStruct），scanSlice 与新增 scanStream 共调；新增 scanStream（file.Rows 迭代逐行）。scanSlice 既有逻辑逐字保留，仅把 383-394 循环体抽成 fillOne 调用，语义零变化"
+      - path: reader.go
+        reason: "新增 reader.rows(name) (string, error) 返回 file.Rows 迭代器（不开新逻辑，复用 GetHeader 已用的 file.Rows() 流式基础设施）；如需流式 skip 需在 Rows 上循环跳过前 skip 行（复用 GetHeader 74-86 的 skip 语义）。不改 GetHeader/GetRows 既有函数体"
     new_files:
-      - path: exporter_options_test.go
-        reason: "P2-1 新增测试：Option 生效（C1 行为级读回）+ R3 覆盖语义（sheet 级覆盖导出级，样式/列宽/验证三维度）"
-      - path: newsheet_test.go
-        reason: "P2-2 新增测试：C2a 单 sheet / C2b 多 sheet / C2c 空 headers/rows 边界三组合"
+      - path: stream_test.go
+        reason: "P2-3 新增测试：AC-1 等价（TestImportStream_EquivalentToImport 含 relation）、AC-2 skip、AC-3 break 释放、开放点2 多 sheet 报错、开放点3 不触发 Collection"
 
-contract_changes: false     # 纯增量：零既有导出符号改动；允许新增导出符号（本轮任务本身）
+contract_changes: false     # 纯增量：零既有导出符号改动；允许新增导出符号 ImportStream（本轮任务本身）
 contract_files: []
-risk_level: low             # 纯增量 + config 兜底不改 setXxx 逐 entry 逻辑；gofmt 纯空白；22 测试安全网
-parallelizable: false       # p2-1 先行（C1 需承载物），p2-2 复用 p2-1 Option 做多维度断言，readme 依赖两 API 定型，串行
+risk_level: medium           # 涉及流式资源释放，但共享内核守护双实现漂移
+parallelizable: false        # T1 基线锁定先行 → T2 ImportStream → T3 readme+benchmark，串行
 
 dependency_order:
   - backend
 
 tasks:
   # ─────────────────────────────────────────────────────────────
-  # T1 P2-1 导出级 Option + R3 覆盖语义
+  # T1 基线锁定（TDD 红基线 + 峰值数字锚点）
   # ─────────────────────────────────────────────────────────────
-  - id: p2-1-options
-    title: "P2-1 导出级 ExportOption（WithStyle/WithDataValidation/WithColumnWidths）+ NewExporterWithOptions + R3 覆盖语义"
+  - id: tdd-baseline
+    title: "基线锁定：确认 31 既有测试全绿 + 复现 BenchmarkImport 1e5 行 1.73GB 峰值 + ImportStream 未实现（编译失败=红）"
     track: backend
     description: >
-      按架构文档 §2/§3 实现：exportConfig{styles,dataValidate,columnWidths}
-      + ExportOption func(*exportConfig) + 三 WithXxx 构造函数 + NewExporterWithOptions；
-      Exporter 加 config 字段，NewExporter 初始化空 config（返回类型不变）；
-      createSheet(49-77) 三处改 sheet 级优先/导出级兜底（覆盖语义），新增 setStyleByMap/
-      setColWidthByMap/setDataValidationByMap 直取函数，复用与 setXxx 逐 entry 完全相同的逻辑
-      （FormatStyle/expandSqref/FormatDataValidate），不改 setXxx 三函数原样。TDD：C1 行为测试
-      （三 Option 生效，读回 xlsx）+ R3 覆盖测试先行（编译失败=红），实现后绿。
+      跑 go test ./... 确认 31 既有测试全绿；跑 BenchmarkImport 1e5 行确认 B/op 1.73GB
+      基线可复现（AC-4 对比锚点）；写 stream_test.go 中引用未实现的
+      ImportStream 符号，编译失败=红基线。此 task 不写实现。
     must_read:
-      - docs/architecture-p2-export-ergonomics.md   # §2 Option 承载 + §3 R3 覆盖语义 + §3.3 合成点
-      - docs/prd-p2-export-ergonomics.md            # §3.1 期望签名 + C1 验收
-      - exporter.go                                 # createSheet(49-77)/setStyle(91)/setColWidth(79)/setDataValidation(106)
-      - excel.go                                    # WithStyles(43)/WithColumnWidths(47)/WithDataValidation(51) 真实签名
-      - style.go / dataValidate.go                  # Style/DataValidate 值类型 + FormatStyle/FormatDataValidate/expandSqref
+      - docs/architecture-v2-import-stream-generics.md   # §2 实现设计 + §1 开放点结论
+      - docs/prd-v2-import-stream-generics.md            # §3 API 形态 + §5 AC-1~4/7/8
+      - benchmark_test.go                                # benBuildXlsx 夹具 + BenchmarkImport 结构与规模
     pattern_ref:
-      - "type ExportOption func(*exportConfig)；exportConfig 承载三 map，零值=未注入"
-      - "NewExporterWithOptions 先 NewExporter(path) 再逐个 opt(ex.config)；后传覆盖先传"
-      - "createSheet：if s.(WithStyles) ... else if config.styles!=nil setStyleByMap；列宽/验证同理"
-      - "setStyleByMap 遍历 map，复用 style.FormatStyle()+NewStyle+SetColStyle（与 setStyle 逐 entry 一致）"
-      - "读回断言：excelize.OpenFile→GetColWidth/GetCellStyle+GetStyle/GetDataValidations 验证真实生效"
+      - "ImportStream(e Excel) iter.Seq2[interface{}, error] 未定义 → 引用的测试编译失败"
+      - "go test -run '^$' -bench BenchmarkImport -benchtime=1x 复现峰值"
     gotcha:
-      - "Exporter.config 是 *exportConfig 且 NewExporter 必须初始化（否则 nil 指针）；Export/Close 签名零变化"
-      - "三 setXxx 原函数逐字不动，新增 xxxByMap 直取，避免改既有路径引入回归"
-      - "Style/DataValidate 是值类型（map[string]Style/map[string]DataValidate），不要写 *Style/*DataValidate"
-      - "R3 覆盖：sheet 级优先、导出级兜底，二选一无歧义，禁止合并叠加"
-      - "现有 22 测试零改动，只新增 exporter_options_test.go 新函数"
+      - "只锁定基线，不改任何 .go 业务源码；新增测试文件可先写测试函数体引用未实现符号"
+      - "峰值度量统一 runtime.ReadMemStats().HeapAlloc（不用 B/op，见架构 §开放点5）"
     tests:
-      - "C1：三 Option 注入后读回断言样式 NumFmt/列宽/数据验证 sqref 生效"
-      - "R3覆盖：实现 WithStyles 的 sheet 覆盖导出级 WithStyle（样式/列宽/验证三维度各一条）"
-      - "现有 22 测试全过"
+      - "go test ./... 全绿（31 既有测试，本轮尚未新增实现）"
+      - "BenchmarkImport 1e5 行峰值 ≈ 1.73GB 量级可复现"
+    validate:
+      - go test ./...
+      - go test -run '^$' -bench 'BenchmarkImport$' -benchtime=1x
+
+  # ─────────────────────────────────────────────────────────────
+  # T2 P2-3 ImportStream（AC-1~4 测试先行）
+  # ─────────────────────────────────────────────────────────────
+  - id: import-stream
+    title: "P2-3 ImportStream 流式导入（iter.Seq2 逐行 yield + defer 释放 + 共享内核 fillOne/scanStream）"
+    track: backend
+    description: >
+      按架构 §2 实现：scanner.go 抽共享内核 fillOne（scanner.go:383-394 循环体抽出，scanSlice 与
+      scanStream 共调）；新增 scanner.scanStream（file.Rows 迭代逐行 fillOne）；reader.go 新增
+      rows(name) 返回 file.Rows 迭代器 + 流式 skip（复用 GetHeader 74-86 语义）；importer.go 新增
+      ImportStream 方法（复用 sheetNameFor/resolveSheetName/imp 的 header+skip 前缀，type switch 命中
+      WithMultipleSheets 返回整体错误，生成器函数内 defer 释放 rows.Close+reader.close）。
+      资源释放用 iter.Seq2 生成器内 defer（实测：range 提前 break 时 yield 返回 false → 生成器 return
+      → defer 确定性执行）。不触发 Collection。TDD：AC-1 等价 + AC-2 skip + AC-3 break 释放 + 多 sheet
+      报错先行，实现后绿。
+    must_read:
+      - docs/architecture-v2-import-stream-generics.md   # §2.1 共享内核 + §2.2 ImportStream 落点 + §1 开放点1/2/3
+      - docs/prd-v2-import-stream-generics.md            # §3.1 形态 + AC-1~4
+      - importer.go                                      # Import(41-74)/sheetNameFor(78-85)/importSingle(88-95)/imp(157-190)
+      - reader.go                                        # GetHeader(58-87) 已用 file.Rows() 流式 + skip 语义
+      - scanner.go                                       # scanSlice(362-397) 循环体 → 抽 fillOne
+    pattern_ref:
+      - "func (s *scanner) fillOne(headerIdx map[string]int, row []string, dst reflect.Value) error { return s.fieldMapper.fillStruct(row, headerIdx, dst, s.handleRelation) }"
+      - "func (i Importer) ImportStream(e Excel) iter.Seq2[interface{}, error]；生成器内 defer rows.Close()+reader.close()"
+      - "for rows.Next() { row,_ := rows.Columns(); yield 逐行 fillOne 结果；fillOne err → yield(nil,err)+return }"
+      - "type switch：case WithMultipleSheets → yield(nil, errors.New('multi sheet use Import'))；default → 单 sheet"
+    gotcha:
+      - "scanSlice 既有循环体逐字保留语义，仅抽成 fillOne 调用；fillStruct/parseCached/handleRelation/RelationResolver 一行不改（R1 红线）"
+      - "yield 的 V 是 *T struct 指针（interface{}），调用方需 row.(*MyRow)；readme 示例必须说明"
+      - "defer 释放在生成器函数内，覆盖 break/耗尽/panic 三路径；不引入显式 Close、不用 runtime.AddCleanup"
+      - "流式 header 复用 GetHeader（含 skip）；数据用独立 file.Rows() 迭代器，跳过首行（表头行）"
+      - "WithHeading 校验 + withSkip 在开生成器前完成（复用 imp 前缀）；skip 在 Rows 迭代上手跳过"
+      - "不触发 Collection（开放点3）"
+    tests:
+      - "AC-1：TestImportStream_EquivalentToImport，含 relation 字段 reflect.DeepEqual"
+      - "AC-2：TestImportStream_Skip，首行与全量 skip 一致"
+      - "AC-3：TestImportStream_BreakReleasesResource，break 后句柄不增长（重复 OpenFile 成功 + 句柄计数）"
+      - "开放点2：TestImportStream_MultiSheetErrors 整体错误"
+      - "开放点3：TestImportStream_NoCollection 不触发"
+      - "既有 31 测试全过，scanSlice 全量路径零回归"
     validate:
       - go test ./...
       - go test ./... -race
@@ -80,149 +103,81 @@ tasks:
       - gofmt -l .
 
   # ─────────────────────────────────────────────────────────────
-  # T2 P2-2 NewSheet helper
+  # T3 readme 文档化 + BenchmarkImportStream 内存对比（原 T4；P2-4 ImportOf 已放弃，T3 import-of 删除）
   # ─────────────────────────────────────────────────────────────
-  - id: p2-2-newsheet
-    title: "P2-2 NewSheet(headers, rows) helper（simpleSheet 值类型实现 Headers/Rows）"
+  - id: readme-bench
+    title: "readme 文档化 ImportStream + 新增 BenchmarkImportStream + AC-4 内存对比表"
     track: backend
     description: >
-      按架构文档 §4 实现：新文件（建议 new_sheet.go）定义 simpleSheet{headers,rows}
-      + Headers() []interface{} + Rows() [][]interface{} + NewSheet(...) Sheet。
-      simpleSheet 不实现任何 WithXxx/WithSheetName/WithMultipleSheets（纯数据，样式/列宽/验证
-      仅能由 T1 的导出级 Option 注入）。TDD：C2a 单 sheet / C2b 多 sheet（复用 p2-1 Option 注入
-      验证三配置）/ C2c 空 headers/rows 边界三组合（nil headers、nil rows、nil+nil），
-      编译失败=红，实现后绿。
+      新增 BenchmarkImportStream（复用 benBuildXlsx 夹具 1e2/1e4/1e5，用 runtime.ReadMemStats 峰值，
+      不用 B/op，与 BenchmarkImport 1.73GB 基线形成 AC-4 对比表）。readme 新增 ImportStream 节
+      （iter.Seq 用法 + 提前 break 释放说明 + row.(*MyRow) 断言示例）。示例与实现一致可编译。
     must_read:
-      - docs/architecture-p2-export-ergonomics.md   # §4 NewSheet 返回类型 + §4.3 空边界写出手续
-      - docs/prd-p2-export-ergonomics.md            # §3.2 期望签名 + C2 验收
-      - excel.go                                    # Sheet(13)/WithHeading(35)/FromCollection(23) 真实签名
-      - exporter.go                                 # writeData(116-132) 依赖 WithHeading/FromCollection
+      - docs/architecture-v2-import-stream-generics.md   # §2.5 benchmark + §3 readme 需写明的偏差
+      - docs/prd-v2-import-stream-generics.md            # AC-4/AC-8
+      - benchmark_test.go                                # benBuildXlsx/benRowValue 夹具复用
+      - readme.md                                        # 现有示例风格
+      - importer.go                                      # ImportStream 真实签名（保证示例一致）
     pattern_ref:
-      - "type simpleSheet struct{ headers []interface{}; rows [][]interface{} }"
-      - "func (s simpleSheet) Headers() []interface{} / Rows() [][]interface{}"
-      - "func NewSheet(headers []interface{}, rows [][]interface{}) Sheet { return simpleSheet{...} }"
-      - "多 sheet：map[string]Sheet{'用户': NewSheet(...), '订单': NewSheet(...)} 走 WithMultipleSheets 分支"
-      - "空边界读回断言：NewSheet(nil,rows) 无表头仅数据；NewSheet(headers,nil) 仅表头；均不 panic"
+      - "BenchmarkImportStream：for row, err := range importer.ImportStream(&e) { _,_ = row,err } 累计解析"
+      - "b.ReportMetric 记录 ReadMemStats().HeapAlloc 峰值；对比表列 ns/op/B/op(参考)/allocs/峰值MB"
+      - "readme ImportStream 节：for row, err := range importer.ImportStream(e) 示例 + row.(*MyRow) 断言"
     gotcha:
-      - "NewSheet 返回 Sheet（空接口），动态类型 simpleSheet，勿导出 simpleSheet 类型"
-      - "空 headers 时 writeData 仍 append 一个 nil 首行，数据从 A1 起（非 A2），断言按此预期"
-      - "simpleSheet 不实现 WithXxx，样式/列宽/验证只能靠导出级 Option（架构 §4.4 边界）"
-      - "现有 22 测试零改动，只新增 newsheet_test.go"
+      - "示例必须用真实签名 ImportStream(e Excel) iter.Seq2[interface{},error]，无 readme/实现漂移"
+      - "峰值度量用 ReadMemStats 非 B/op（架构 §开放点5）；对比表口径写明"
+      - "readme 必须写明偏差：row.(*MyRow) 断言；Collection 不触发；多 sheet 报错用 Import"
+      - "不新增第三方依赖、不改 xlsx: 标签、不碰 test/ 夹具、不改 go.mod"
     tests:
-      - "C2a：Export(NewSheet(headers,rows)) 读回断言表头+数据行列序/值类型一致"
-      - "C2b：NewSheet 作 map[string]Sheet 两值组合 WithMultipleSheets 导出，两 sheet 均正确"
-      - "C2c：NewSheet(nil,rows)/NewSheet(headers,nil)/NewSheet(nil,nil) 三边界不 panic 且读回符合预期"
-      - "现有 22 测试全过"
+      - "BenchmarkImportStream 1e2/1e4/1e5 三档产出，峰值 vs 1.73GB 对比表落入架构 §开放点5 两档门槛（无 relation ≤10%）"
+      - "readme 示例可编译（Example* 测试或 go build 静态检查）"
     validate:
       - go test ./...
-      - go test ./... -race
-      - go vet ./...
-      - gofmt -l .
-
-  # ─────────────────────────────────────────────────────────────
-  # T3 gofmt 债清理（scanner.go 纯空白）
-  # ─────────────────────────────────────────────────────────────
-  - id: gofmt-scanner
-    title: "gofmt 债清理：scanner.go 纯空白/对齐/尾空行格式化，语义零变化"
-    track: backend
-    description: >
-      对 scanner.go 执行 gofmt -w。改动须为纯空白：RelationResolver 结构体字段对齐（约 205-219 行）+
-      NewRelationResolver 复合字面对齐 + 文件尾多余空行（约 396-398）。不改任何标识符/字符串/控制流/注释内容。
-      验证：git diff scanner.go 仅空白；gofmt -l . 归零（全仓）；go test ./... 全过（语义锚点 PRD R5）。
-    must_read:
-      - docs/prd-p2-export-ergonomics.md            # §3.3 gofmt + R5 语义零变化
-      - scanner.go                                  # 确认仅格式化，不读不改业务逻辑
-    pattern_ref:
-      - "gofmt -w scanner.go"
-      - "git diff scanner.go 逐 hunk 确认仅空白/对齐/尾空行"
-      - "gofmt -l . 输出为空（scanner.go 归零且全仓干净）"
-    gotcha:
-      - "只 gofmt -w scanner.go，禁手动编辑；若想精确可 gofmt -d scanner.go 预审 diff"
-      - "严禁顺手动 importer/reader/column 业务逻辑（N2 红线）"
-      - "格式化改动单独成块提交，不与其他 task 的 exporter.go 改动交织（PRD R5）"
-    tests:
-      - "gofmt -l . 输出为空"
-      - "现有 22 测试全过（语义锚点）"
-    validate:
-      - gofmt -l .
-      - go test ./...
-
-  # ─────────────────────────────────────────────────────────────
-  # T4 C6 文档化 + 既有类型漂移修正
-  # ─────────────────────────────────────────────────────────────
-  - id: readme-docs
-    title: "C6 readme 文档化（NewExporterWithOptions 三 Option + NewSheet 单/多 sheet）+ 修正 readme.go 既有类型漂移 + C4 before/after 行数对比"
-    track: backend
-    description: >
-      新增 NewExporterWithOptions（WithStyle/WithDataValidation/WithColumnWidths 各一例）与
-      NewSheet（单 sheet + 多 sheet 两例）英文说明 + Go 代码块，示例与实现签名一致可编译。
-      连带修正 readme.md:101（Style() 返回 map[string]*excelize.Style → map[string]Style）与
-      readme.md:114（DataValidation() 返回 map[string]*excelize.DataValidation → map[string]DataValidate），
-      修正后逻辑等价、不改任何已导出符号。产出 C4 before/after 行数对比表（三配置单表导出 + 纯数据
-      单表导出两场景，口径仅计用户手写样板行，两范式产出同一张 xlsx），落入 P2-1 40-60%/P2-2 50-70%。
-    must_read:
-      - docs/architecture-p2-export-ergonomics.md   # §1.5 readme 漂移 + §7.4 + §6 C4 样板对比
-      - docs/prd-p2-export-ergonomics.md            # C4/C6 验收
-      - readme.md                                   # 现有示例风格 + 101/114 漂移行
-      - excel.go                                    # 真实接口签名（保证示例一致）
-    pattern_ref:
-      - "NewExporterWithOptions 示例：三 WithXxx 以函数参数叠加，与旧结构体范式产同张 xlsx"
-      - "NewSheet 单 sheet：NewExporter+Export(NewSheet(headers,rows))；多 sheet：map[string]Sheet"
-      - "旧范式示例类型改回 map[string]Style / map[string]DataValidate，与 excel.go 签名一致"
-      - "before/after 行数对比表（用户手写样板行口径）"
-    gotcha:
-      - "示例代码必须与实现签名一致（无 readme/实现漂移），可用 go build 或抽取示例测试验证可编译"
-      - "修正 101/114 仅改返回类型为正确值类型，不改方法名/逻辑/新增符号"
-      - "不新增第三方依赖、不改 xlsx: 标签、不碰 test/ 夹具"
-    tests:
-      - "readme 含 NewExporterWithOptions 三 Option 各一例 + NewSheet 单/多 sheet 两例"
-      - "C4 before/after 行数对比表落入 40-70% 区间"
-    validate:
-      - go test ./...
+      - go test -run '^$' -bench 'BenchmarkImportStream$' -benchtime=3x -count=1
       - go vet ./...
       - gofmt -l .
 
 dispatch:
   - agent: devflow-backend-dev
     task_ids:
-      - p2-1-options
-      - p2-2-newsheet
-      - gofmt-scanner
-      - readme-docs
+      - tdd-baseline
+      - import-stream
+      - readme-bench
     boundary:
       allowed_files:
-        - exporter.go
-        - excel.go
-        - style.go
-        - dataValidate.go
-        - scanner.go            # 仅 gofmt 格式化，纯空白
-        - readme.md             # C6 文档化 + 既有类型漂移修正
+        - importer.go           # 仅新增 ImportStream 方法，不改既有函数体
+        - reader.go             # 仅新增 rows(name) 迭代器 + 流式 skip，不改 GetHeader/GetRows
+        - scanner.go            # 仅抽 fillOne 共享内核 + 新增 scanStream，scanSlice 循环体语义保零变化
+        - readme.md             # 文档化 ImportStream（含偏差说明）
       allow_new_test_files: true
-        # 新增 exporter_options_test.go / newsheet_test.go（新函数，不得改既有测试函数）
+        # 新增 stream_test.go（新函数，不得改既有测试函数）
       forbidden_files:
-        - importer.go           # 导入链路业务逻辑，严禁动
-        - reader.go             # 导入链路，严禁动
-        - column.go             # 导入链路，严禁动
-        - errors.go             # 本轮不涉及
+        - column.go             # parse/parseTag/parseCached 冻结契约，严禁动
+        - errors.go             # 本轮复用 InvalidUnmarshalError，不改定义
+        - excel.go              # 接口集冻结（Excel/Sheet/WithXxx 签名），严禁动
+        - exporter.go           # 导出侧，本轮无关
         - go.mod
         - go.sum
         - test/**               # 夹具 xxx.xlsx 等，严禁删改
         - v1/**
       forbidden_actions:
-        - "不得修改、删除、改名任何已导出符号（Sheet/WithXxx/FromCollection/NewExporter/Exporter.Export 等）"
+        - "不得修改、删除、改名任何已导出符号（Import/ImportConcurrent/Close/NewImporter*/Excel/Sheet/WithXxx 等）"
         - "不得修改既有测试函数（只可新增 *_test.go 增补新函数）"
         - "不得新增第三方依赖（当前仅 spf13/cast 与 xuri/excelize/v2）"
-        - "不得修改 xlsx: 标签解析语义与中文列名文案"
-        - "不得动 importer.go/reader.go/column.go 业务逻辑（scanner.go 仅 gofmt 例外）"
+        - "不得修改 xlsx: 标签解析语义与中文列名文案（column.go 冻结）"
+        - "不得改 scanSlice/fillStruct/parse/parseCached/RelationResolver 的既有语义（R1 复用红线，只抽共享内核不重写）"
+        - "不得在 ImportStream 触发 Collection 或改 Import 的 Collection 语义"
+        - "不得改 go.mod 版本（go 1.23.3 已满足 iter 包）"
 
 memorant_recall_query: >
-  go-excelize 导出 Exporter ExportOption functional options WithStyle WithDataValidation
-  WithColumnWidths NewSheet simpleSheet 覆盖语义 sheet 级 导出级 能力对等 行为级断言 读回 xlsx
-  gofmt scanner.go 空白 readme 类型漂移 Style DataValidate 值类型
+  go-excelize Import ImportStream iter Seq2 流式导入 逐行 yield 内存峰值 O(N) O(字段)
+  R1 复用 fillStruct parseCached RelationResolver getChildData cache 子表预加载 relation 语义
+  defer 释放 句柄泄漏 门槛设定 机制上限 峰值 ReadMemStats B/op 累计 量级下降
+  parse 递归 嵌套 struct 跳过复合字段
 
 methodology:
-  tdd: "新 API 测试先行（未实现符号编译失败=红，行为级读回断言=绿）；三类 Option + NewSheet 边界全覆盖"
-  compatibility: "纯增量：现有 API 签名/行为零变化，现有 22 测试零改动全过，xlsx: 标签冻结"
-  r3_semantics: "R3 覆盖语义必须测试锁定：sheet 级接口方法覆盖导出级 Option（样式/列宽/验证三维度各一条）"
-  c4_boilerplate: "readme 示例 before/after 行数对比表（P2-1 40-60%，P2-2 50-70%），实现报告给对比表"
-  validate: "go test ./... + go test ./... -race + go vet ./... + gofmt -l ."
+  tdd: "新 API 行为级测试先行（AC-1 等价/AC-2 skip/AC-3 break 释放，未实现符号编译失败=红）；共享内核抽完 scanSlice 全量路径零回归"
+  compatibility: "纯增量：现有 API 签名/行为零变化，现有 31 测试零改动全过，xlsx: 标签冻结，go.mod 不升版本"
+  r1_reuse: "流式复用解析链路只换数据源（GetRows→Rows 迭代器），fillStruct/parseCached/RelationResolver 只此一份，双实现漂移=验收失败"
+  release_mechanism: "iter.Seq2 生成器内 defer 释放（实测 yield=false→return→defer 确定性执行），不用显式 Close/runtime.AddCleanup"
+  memory_threshold: "门槛 ≤ 机制上限 × 0.8；无 relation ≤ 全量 10%（~173MB 峰值），含 relation ≤ Relation 基线 30%（~113MB）；度量用 ReadMemStats 峰值非 B/op"
+  validate: "go test ./... + go test ./... -race + go vet ./... + gofmt -l . + benchmark 命令"
