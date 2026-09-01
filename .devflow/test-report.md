@@ -1,109 +1,176 @@
-# Test Report — go-excelize 三个 P0 正确性 Bug 修复（bugfix round 1 回归）
+# Test Report — go-excelize 第二轮优化实施（feature 回归，round 1）
 
-**overall: ALL GREEN**
+**overall: ALL GREEN**（含 1 处事实纠正 + 1 处预存在 gofmt 债，均非功能失败）
 
-分支：`fix/go-excelize-three-p0-correctness-bugs-bc2528`
-测试工作区：`/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-three-p0-correctness-bugs-bc2528`
-测试方式：只测不改，独立逐条验证研发自述，不采信 TDD 红阶段自述（红阶段未复现，仅核对绿阶段断言方向 + 修复 diff 与根因的一致性）。
+分支：`feature/go-excelize-optimization-implementation-6a1e7b`（base `c35b0dc`）
+测试工作区：`/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-optimization-implementation-6a1e7b`
+测试方式：只测不改，独立逐条验证研发自述，不采信自述的 benchmark 与测试拆分；Go `go1.26.4 darwin/arm64`（与研发采集同版本）。
+
+两处需上报的事实性说明（均不构成本轮功能回归）：
+1. **测试计数拆分有误**（见 §6）：基数实为 **18 原 + 4 新 = 22**，非研发报告的「17 原 + 5 新」。
+2. **`gofmt -l scanner.go` 非干净，但该问题预存在于 base `c35b0dc`**（见 §4.4），非本轮两 commit 引入。
 
 ---
 
 ## 1. 全量回归 —— ALL GREEN
 
-| 检查 | 结果 | 证据 |
+| 命令 | 结果 | 证据 |
 |------|------|------|
-| `go test ./... -v` | PASS | `ok github.com/starme/go-excelize 0.537s`，17 个测试全 PASS |
-| `go vet ./...` | PASS | 无输出，exit 0 |
-| `go build ./...` | PASS | 无输出，exit 0 |
+| `go test ./... -v` | **PASS 22/22** | `ok github.com/starme/go-excelize 0.532s`，无 FAIL |
+| `go test ./... -race` | **PASS** | `ok github.com/starme/go-excelize 1.506s` |
+| `go vet ./...` | **干净** | 无输出，exit 0 |
+| `go build ./...` | **干净** | 无输出，exit 0 |
 
-测试列表（17 个）：TestResolveSheetName_ExplicitMissingSheet / DefaultFallback / ExplicitExistingSheet、TestIsLengthError_True / TestIsMismatchError_True / TestIsLengthError_NegativeCases / TestIsLengthError_NotWrappedLengthError、TestExport、TestImport、TestRelation、TestImportConcurrentReportsAllSheets、TestReflect、TestReaderWithSkip、TestNewReaderOfPathError、TestConvertToType_TypeMismatchErrors / EmptyValueZeroValue / ValidConversion / UnknownTypeErrors。
+22 个测试函数（18 原 + 4 新，见 §6 纠正）：
 
-TestImport（default→首 sheet 回退红线）与 TestRelation（空单元格 int 字段零值豁免）均 PASS。
-
----
-
-## 2. L1 行为验证（独立事实抽查）
-
-### P0-2（IsLengthError）
-- **断言方向真实**：`TestIsLengthError_True`（errors_test.go:86-95）断言 `newHeaderLengthError(3,5)` 经 `newValidateHeaderError` 包裹后 `IsLengthError()==true`。方向正确，非恒真——依赖 `errors.As` 值/指针形态正确匹配。
-- **根因一致性已独立确认**（读 errors.go 源码）：`IsLengthError` 用 `errors.As(v.Err, &HeaderLengthError{})`（值 target，errors.go:37）；`newHeaderLengthError` 修复后返回 `HeaderLengthError{}`（值，errors.go:61），与 `IsMismatchError`/`newHeaderMismatchError` 的值范式一致。修复前返回 `&HeaderLengthError{}`（指针），Go `errors.As` 无法把指针 error 赋值给值 target → 恒 false。修复形态与根因完全对应。
-- **误判防护真实**：`TestIsLengthError_NegativeCases`（errors_test.go:108-122）对 mismatch/sheetNotExist 断言 `IsLengthError()==false`；`TestIsLengthError_NotWrappedLengthError`（124-130）对 plain error 断言 false。非长度错误不误判。
-
-### P0-3（类型转换，双向）
-- **非空脏值报错方向**：`TestConvertToType_TypeMismatchErrors`（scanner_test.go:22-47）对 `"abc"`→int64 字段断言 err 非 nil，且错误信息含字段名（I64）/期望类型（int64）/实际值（abc）。方向正确、信息完整。`TestConvertToType_UnknownTypeErrors`（120-144）对 slice 字段断言 err 非 nil（修复前 panic）。
-- **空串豁免填零值方向**：`TestConvertToType_EmptyValueZeroValue`（49-72）对 `""`→int64/string 断言 err==nil 且值==0/空串。方向正确。`TestRelation` 空单元格 int 字段（Selected:0/Required:0）实际 PASS 佐证豁免语义生效。
-- 修复 diff（scanner.go:41-83）确认新增 `convertToTypeStrict`：空串直接 `reflect.Zero(targetType)`，int/int64/float64/bool 用 `strconv.Parse*`，default 报明确错误。与断言方向一致。
-
-### P0-1（sheet 名，双向）
-- **显式拼错报错方向**：`TestResolveSheetName_ExplicitMissingSheet`（errors_test.go:35-50）对 `resolveSheetName("userSheet", true)` 断言 err 非 nil 且 `errors.As(err, &excelize.ErrSheetNotExist{})` 成立且 `SheetName=="userSheet"`。方向正确。
-- **default 回退方向**：`TestResolveSheetName_DefaultFallback`（52-71）对 `resolveSheetName(defaultSheetName, false)` 与 `resolveSheetName("", false)` 均断言 err==nil 且返回首 sheet "SheetA"。`TestImport` 实际 PASS 锁定红线。
-- 修复 diff（reader.go:119-131）确认仅当 `explicit && name != "" && name != defaultSheetName && !sheetExists` 时返回 `excelize.ErrSheetNotExist{SheetName: name}`；default/空名保留回退首 sheet。与断言一致。
-
----
-
-## 3. L2 边界核查 —— 通过
-
-`git diff 4c6bf38..HEAD --stat` 确认变更文件**仅限** 7 个：
 ```
-errors.go(2) errors_test.go(+130) importer.go(+8/-0) reader.go(+9/-0)
-readme.md(+8) scanner.go(+55/-0) scanner_test.go(+144)
+TestConvertToType_{EmptyValueZeroValue,TypeMismatchErrors,UnknownTypeErrors,ValidConversion}
+TestExport  TestFieldCache_{ConcurrentFillRace,IsolationBetweenTypes,TransparencyRepeatedImport}
+TestImport  TestImportConcurrentReportsAllSheets
+TestIsLengthError_{NegativeCases,NotWrappedLengthError,True}  TestIsMismatchError_True
+TestNewReaderOfPathError  TestParseCached_ReusesBackingSlice  TestReaderWithSkip
+TestReflect  TestRelation
+TestResolveSheetName_{DefaultFallback,ExplicitExistingSheet,ExplicitMissingSheet}
 ```
-与 scope.yaml boundary 完全一致（允许改 errors.go/reader.go/scanner.go/importer.go/readme.md，新增 errors_test.go/scanner_test.go）。未触及 exporter.go/column.go/excel.go/func.go/style.go/dataValidate.go，未改 importer_test.go/reader_test.go/exporter_test.go/benchmark_test.go，未动 test/ 夹具、go.mod/go.sum。
-
-**导出 API 签名核查**（`git diff ... -- errors.go reader.go importer.go scanner.go`）：
-- `newHeaderLengthError`：返回 `error` 接口签名未变，仅 concrete type 由 `*T`→`T`。
-- `resolveSheetName`：未导出方法（小写 r），改签名为 `(string, bool)`，外部无引用。
-- `ConvertToType`（导出，TypeConverter 方法）：签名 `ConvertToType(targetType reflect.Type, value any) reflect.Value` **完全未变**（diff 未触及该函数体 16-38 行）。
-- 无任何 `xlsx:` 标签语法改动。
-
-唯一注记：`convertToTypeStrict` 注释为中文（scanner.go:41-43），而 scope 要求注释英文；但本文件 `FieldMapper` 等既有注释本就是中文，属风格继承，非缺陷，不计入失败。
 
 ---
 
-## 4. L3 测试有效性 —— 通过
+## 2. L1 缓存正确性（P0-4 核心）—— PASS
 
-抽查全部 11 个新增/变更测试，均为真实断言（非恒真）：
-- 正面断言依赖 `errors.As` 值/指针精确匹配（P0-2）与 `strconv.Parse*` 解析成功路径（P0-3 ValidConversion 逐字段核对 I64=123/I=456/F=1.5/B=true/S=hello）。
-- 负面断言依赖 `strconv.Parse*` 失败路径（TypeMismatchErrors 真实传入 "abc"）。
-- `TestConvertToType_UnknownTypeErrors` 正确规避了「嵌套 struct 字段被 parse 递归 skip」陷阱——改用无 split 标签的 `[]string` 字段落入 default 分支（研发报告中记录在案的测试设计修正，实测成立）。
+逐条独立核实，断言方向真实、非恒真。
 
-**红阶段证据说明**：本 agent 未复现 TDD 红阶段（研发用 `git stash` 还原旧源码演示）。红阶段失败输出与修复内容逻辑一一对应：P0-2 失败 `expected IsLengthError()==true, got false` ↔ 指针/值形态修复；P0-3 失败 `expected error for "abc", got nil` + `panic: reflect.Set` ↔ strict 转换 + default 分支报错；P0-1 失败 `too many arguments in call to r.resolveSheetName` ↔ 增签名。逻辑自洽，无可疑。
+### 2.1 缓存的 []field 运行期只读
+读 `column.go`/`scanner.go` 核实：`applyFieldRule`（scanner.go:150）对 `f` 只读 `f.name/f.typ/f.ignored/f.deft/f.split/f.relation`，无写路径；`ResolveRelation`/`matchAndSet`/`matchSliceRelation` 只读 `f.relation.sheetName/references/foreign` 与 `f.typ`；`handleRelation` 仅转发不改写。`fieldCache` 存储的 `[]field`（含 `*relation` 指针）解析后**无运行期写路径**，多 goroutine 只读共享安全。
 
----
+### 2.2 buildHeaderIndex 首个写定语义
+`scanner.go:107-115`：`if _, exists := headerIdx[h]; !exists { headerIdx[h] = i }` —— 重复表头取**第一个**下标，与被替换的原线性查找 `for i, header := range headers { if header == alias { ...; break } }` 的「第一个匹配 + break」语义等价。
 
-## 5. Benchmark 复核 —— 达标（±20% 内，无显著回退）
+### 2.3 parseCached 复用原 parse（无第二套解析）
+`column.go:73-85`：`parseCached` 直接 `parse(reflect.New(t).Elem())`，`LoadOrStore(t, fields)` 首写、`Load` 后续读；用 `LoadOrStore` 返回值 `actual` 覆盖本地 `fields`（并发防丢首次写入）。**无第二套解析逻辑**，规避双实现漂移。
 
-独立跑 `-benchtime=3x -count=3`（Apple M2 / darwin / arm64），1e5 档：
-
-| 基准 | 基线 §3.1 | 本次中位数 | 偏移 | 判定 |
-|------|----------|-----------|------|------|
-| Import 1e5 | 3.82s | **4.39s**（3.99/4.71/4.39） | +15% | 内 |
-| FillStruct 1e5 | 199ms | **235ms**（239/235/197） | +18% | 内，但接近上界 |
-
-allocs 对比（1e5）：Import 36.21M vs 基线 36.6M（略降）；FillStruct 2.90M vs 基线 3.30M（略降）。**allocs 均无回退**。
-
-**与研发报告差异**：研发报告 FillStruct 1e5 中位数为 ~216ms（+8.5%），我的独立采样为 ~235ms（+18%）。二者都在 ±20% 内、都不构成显著回退，但我的数据明显更接近上边界。归因：`-benchtime=3x` 每档仅 3 次采样、`count=3` 共 9 次采样，波动本身达 ±10%（FillStruct 三次 239/235/197 跨度即 21%），采样噪声是主因，不是修复引入的确定性回退。strconv.Parse* 与 cast 强转同量级，allocs 不升反降，支持「无显著回退」结论。**建议**（非本次 scope，仅提示）：若需精确量化，应改用 `-benchtime=1s` 长跑减小噪声。
-
-**结论：benchmark 达标，支持研发「无显著回退」结论，仅 FillStruct 采样值高于研发报告但仍在公差内。**
+### 2.4 新增测试断言方向真实
+- `TestFieldCache_IsolationBetweenTypes`：两个字段布局不同但表头相同的类型 `cacheTestRowA`（Code/Alias）与 `cacheTestRowB`（Code/Name），各自断言不串扰。**非恒真**——若缓存不按 type 隔离，第二次填 A 会拿到 B 的字段布局而失败。
+- `TestParseCached_ReusesBackingSlice`：白盒断言两次 `parseCached(tp)` 的 `&first[0] == &second[0]`（共享底层数组）。**非恒真**——缓存未落地时 `parseCached` 不存在（编译失败=红，研发已记录 `undefined: parseCached`），实现前过不了。
+- `TestFieldCache_ConcurrentFillRace`：16 goroutine × 200 并发 `FillStruct` 同一类型，`-race` 下真实覆盖包级 `fieldCache` 并发读写。
 
 ---
 
-## 6. readme 文档核查 —— 通过
+## 3. L1 行为锁定 —— PASS
 
-`git diff ... -- readme.md` 新增两段说明：
-1. 显式非默认 sheet 名不存在 → 返回 `excelize.ErrSheetNotExist`；默认/空名仍回退首 sheet。与 reader.go 实现**完全一致**。
-2. 非空值无法解析为目标类型 → 返回带字段名/期望类型/实际值的错误，不再静默填零值；空值仍填零值。与 scanner.go `convertToTypeStrict` 实现**完全一致**。
-
-无夸大、无不实。
+关键回归全过：`TestImport`、`TestRelation`、`TestImportConcurrentReportsAllSheets` 全绿——P0-3 空值豁免、P0-1 sheet 名语义、relation 切片/单对象匹配均未被缓存改造破坏。`TestResolveSheetName_*` 三分支（显式缺失报错 / 默认回退 / 显式存在直用）锁定。
 
 ---
 
-## 7. failures
+## 4. L2 边界核查 —— 通过
 
-无。
+### 4.1 变更文件数
+`git diff c35b0dc..HEAD --stat` = **8 文件**，与预期一致：
 
-## 8. memory_candidates
+```
+column.go +28 / dataValidate.go +17 / errors.go +14 / exporter.go +8
+field_cache_test.go +141（新增）/ importer.go +73 / reader.go +6 / scanner.go +30
+```
 
-1. **Go `errors.As` 值/指针 target 陷阱（测试侧经验）**：回归测试要同时覆盖「正例识别」与「反例不误判」，并直接读构造函数返回值形态核对 `errors.As` 的 target 形态是否一致——单看测试通过不足以证明值/指针形态正确（恒 true 的断言也能"过"），须叠加 `TestIsLengthError_NegativeCases` 这类反例兜底。
-2. **反射复合字段测试陷阱**：用 `reflect` 遍历结构体时，`parse()` 会递归枚举嵌套 struct 并 skip 复合字段本身，导致「嵌套 struct 字段走常规赋值」测试设计失效；真正落入标量转换 default 分支的是无 split 标签的 slice 等复合类型（`[]string` 配 `xlsx:"name:items"`）。与研发 memory_candidates #2 一致，测试侧再次印证。
-3. **benchmark 采样方法论**：`-benchtime=3x -count=3` 对 1e5 量级、秒级基准仅 9 次采样，噪声可达 ±20%，不足以量化 <10% 的偏移；要区分「+8.5% vs +18%」这类差异须改用 `-benchtime=1s` 长跑或更多 count。回归判定用「±20% + allocs 不升」作粗粒度门槛合理，但不要在低采样下臆断精确偏移值。
+### 4.2 导出符号变化
+唯一导出结构体字段变化 = **`ExcelLineError.Line` 删除**（PRD §3.4 批准）+ `InvalidUnmarshalError.Error()` 前缀 `"json: Unmarshal"` → `"excelize: cannot unmarshal"`（PRD §4.2 豁免）。无其他导出 API/签名变化：
+- `Importer.Close()` 签名不变（`func (i Importer) Close()` 无返回），内部 `_ = i.reader.close()`。
+- `FillStruct`/`Import`/`ImportConcurrent` 签名不变（`Import`/`ImportConcurrent` 改具名返回值 `(err error)`，形态仍为 `error`，非 breaking）。
+- `go doc -all .` 枚举：`ExcelLineError`/`LinesError`/`InvalidUnmarshalError` 等全部导出类型仍在，无增无删。
+- 新增代码（`buildHeaderIndex`/`parseCached`/`fieldCache`）gofmt 干净。
+
+### 4.3 go.mod/go.sum/既有测试/夹具零改动
+`git diff c35b0dc..HEAD -- go.mod go.sum test/ importer_test.go errors_test.go scanner_test.go reader_test.go exporter_test.go benchmark_test.go` = **空**。依赖冻结、夹具、既有测试函数零改动。grep 无残留 `.Line`/`.encoding`/`json: Unmarshal` 引用（仅存 `ExcelLineError` 类型定义本身）。
+
+### 4.4 预存在 gofmt 债（非本轮引入）
+`gofmt -l *.go` 仅报 `scanner.go`；diff 为 `RelationResolver` 结构体字段对齐（`reader`/`cache` 多一空格）+ 文件尾空行。`git show c35b0dc:scanner.go | gofmt -d` 有**相同** diff → **该问题在 base `c35b0dc` 即存在**，非 `3df374a`/`864acf3` 引入。本轮新增代码 gofmt 干净。属历史债，建议后续单独 `chore` 处理，不阻塞本轮。
+
+---
+
+## 5. L2 偏差核查（研发报告 3+1 条）—— 全部成立
+
+1. **P1-2 多 sheet 分支不套 `sheetNameFor`（偏差 1）——成立**。读 `importer.go`：`sheetNameFor`（:78）缺省回退 `defaultSheetName`；多 sheet 循环 `for n, s := range f.Sheets()`（`Import`:58 / `ImportConcurrent`:122）以 map key `n` 作缺省名，仅实现 `WithSheetName` 时覆盖。两者在 `f` 未实现 `WithSheetName` 时语义不同（helper 会把多 sheet key 名都替换成 "Sheet1"，属漂移）。`importSingle`/`sheetNameFor` 确只用于 default 单 sheet 分支。
+2. **P1-5 `expandSqref` 用 SplitN 镜像（偏差 2）——成立**。`dataValidate.go`/`exporter.go` diff：`expandSqref` 精确复刻原 `SplitN(ref,":",2)` + `len==1 append 自身`，非 `strings.Cut`；两处调用点拼回各自尾随语义（`SetColWidth(name,from,to,w)` / `strings.Join([]string{from,to},":")`）。
+3. **未改 applyFieldRule 的 FieldByName 反射（偏差 3）——成立**。scope 红线覆盖，L1 核实 `applyFieldRule` 确未改动。
+4. **readme 无需改（偏差 4）——成立**。grep 确认 readme.md 无 `ExcelLineError`/`LinesError`/`json: Unmarshal`/`.encoding`/`.Line` 引用。
+
+---
+
+## 6. L3 测试有效性 —— PASS（含 1 处计数纠正）
+
+- 新增 4 测试非恒真（见 §2.4）；并发测试确有 `-race` 覆盖；TDD 红阶段（`undefined: parseCached` 编译失败）与实现 `parseCached` 对应。
+
+**计数纠正**：
+- 研发报告与 task brief 称「22 = 17 原 + 5 新」「新增 5 测试」。
+- 实测 base `c35b0dc` 测试函数为 **18 个**（importer_test 4 + errors_test 7 + scanner_test 4 + reader_test 2 + exporter_test 1），非 17。
+- 新增 `field_cache_test.go` 测试函数为 **4 个**（IsolationBetweenTypes / TransparencyRepeatedImport / ReusesBackingSlice / ConcurrentFillRace），非 5。
+- 正确拆分：**18 原 + 4 新 = 22**。总量 22 正确、全绿属实；「17 原 + 5 新」各差 1，属报告笔误，不影响结论。
+
+---
+
+## 7. Benchmark 独立复核
+
+> 研发 before（M1）：FillStruct 100/10k/100k = 186,806 / 20,020,527 / 202,770,972 ns/op；Import 100/10k/100k = 2,998,316 / 227,552,525 / 4,298,154,083 ns/op；allocs 36.2M（100k）。
+
+### 7.1 FillStruct（独立 count=3）—— PASS
+| 档位 | ns/op（本 agent） | allocs/op | 提速 vs before |
+|------|------------------|-----------|----------------|
+| 100  | 71.5k（71,398/71,646/73,590） | 800 | +61.7% |
+| 10k  | 7.25M（6.99M/7.29M/7.47M） | 80,000 | +63.8% |
+| 100k | 76.6M（74.7M/75.1M/79.9M） | 800,000 | +62.2% |
+
+**≥60% 提速稳定可复现**（61.7%~63.8%，与研发 +62.3%~+65.4% 一致）；allocs 29→8/行 = **8 allocs/行 ≤10 达标**。信号清晰无噪声。
+
+### 7.2 Import（核心争议，独立 count=5）
+| 档位 | ns/op 样本（5 次） | allocs/op |
+|------|--------------------|-----------|
+| 100  | 2,616,742 / 2,747,332 / 2,802,083 / 3,127,005 / 3,148,324 | 37,127（恒定） |
+| 10k  | 210.6M / 221.5M / 239.6M / 278.9M / 303.4M | 3,255,254~263（近乎恒定） |
+| 100k | 3.86s / 3.99s / 4.87s / 5.00s / 5.10s | 34,105,426~560（恒定） |
+
+**独立数据与事实结论**（不含裁决）：
+
+1. **wall-clock 高噪声，与研发报告一致**。100 行跨度 2.62~3.15ms（±20%）；10k 跨度 210~303ms（±44%）；100k 跨度 3.86~5.10s（±32%）。10k/100k 档 wall-clock 相对 before 的提速**不能稳定跨过 8%**：10k 中位 ~239ms（vs before 227ms，+5.3%）、100k 中位 ~4.87s（vs before 4.30s，**~-13% 噪声倒退**）。与研发「100 +10% 达标、10k +5.8%、100k -1.2%」的噪声边界结论**可复现**，本 agent 的 100k 样本噪声更烈（-13%，因 count=5 含更多热节流采样）。
+2. **allocs/op 下降确定性可复现**。3 档 allocs 高度稳定：100=37,127（与研发 after 一致）；10k=~3,255,260；100k=~34,105,500。100k 档 36.2M→34.1M（**-5.8%**）**精确复现**，样本方差 <0.001%。这是缓存命中热路径铁证——allocs 不受 wall-clock 噪声影响。
+3. **机制印证研发归因**：FillStruct 微基准稳定 +62%，但 Import 端到端仅 ~5-10% 且被噪声淹没，因 FillStruct 的 33 allocs 仅占端到端 366 allocs/行约 9%，P0-4 提速被 excelize 底层 cell 解析 + IO 稀释。归因链成立。
+
+### 7.3 无回退快速复核（count=2）
+| Benchmark | 100 行 | 10k | 100k | allocs（100k） | 判定 |
+|-----------|--------|-----|------|----------------|------|
+| ImportConcurrent | 2.69~2.74ms | 214~292ms | 4.00~4.19s | 34,105,529~603 | 无回退 |
+| ScanSlice | 1.25~1.30ms | 148~168ms | 3.71~3.97s | 34,101,362~510 | 无回退 |
+| Relation | 1.62~1.70ms | 71.5~73.1ms | 690~692ms | 5,010,925~932 | 无回退 |
+
+三项均正提速、allocs 全降，**无回退**，与研发方向一致。
+
+---
+
+## 8. PRD P0 验收标准预核查（§5 可机械核查项）
+
+| # | 标准 | 预判 | 依据 |
+|---|------|------|------|
+| 1 | `go test ./...` 全过 | **PASS** | 22/22 绿，含 TestImport/TestRelation |
+| 2 | `go vet ./...` 干净 | **PASS** | 无输出 |
+| 3 | FillStruct/Import 可测量提升、allocs 不升、无回退 | **待裁决** | FillStruct +62% 明确；Import wall-clock 噪声（§7.2），allocs -5.8% 明确下降；数值门槛由 Manager/用户裁决 |
+| 4 | `-race` 并发测试通过 | **PASS** | `go test -race ./...` 通过 |
+| 5 | 不同类型缓存隔离 | **PASS** | TestFieldCache_IsolationBetweenTypes 绿 |
+| 6 | 同类型重复导入一致 | **PASS** | TestFieldCache_TransparencyRepeatedImport 绿 |
+| 7 | 导出 API 面未增删改 | **PASS** | 仅 `ExcelLineError.Line` 删除（§3.4 批准）+ 错误文本（§4.2 豁免）；`Importer.Close()` 无返回不变 |
+| 8 | `xlsx:` 五类标签行为不变 | **PASS** | 现有 18 测试 + 缓存测试锁定；parseTag 源码未改 |
+| 9 | Deprecated 标注存在、Line 已删、前缀已改 | **PASS** | errors.go:105/115 有 `// Deprecated:`；`Line` 字段与注释代码已删；前缀已改 |
+| 10 | InvalidUnmarshalError 文本无 "json: Unmarshal" | **PASS** | errors.go:18-24 改 "excelize: cannot unmarshal ..." |
+| 11 | 外部行为除错误文本外不变 | **PASS** | L1 行为锁定 + 22 测试全绿 |
+| 16 | 依赖未新增 | **PASS** | go.mod go.sum 零 diff |
+| 17 | 测试规范（testing+DeepEqual、无 testify、夹具未改） | **PASS** | 用例全 `testing`；无 testify；test/ 零 diff |
+
+（#12~15 属 P1，均已由源码 diff 证实：P1-1 close 无吞错、P1-2 helper 抽取、P1-4 encoding 删除、P1-5 expandSqref 抽取，行为逐项一致。）
+
+---
+
+## 9. failures / memory_candidates
+
+**failures**：无功能失败。仅两条事实性说明（见 overall：测试计数拆分笔误 + 预存在 gofmt 债）。
+
+**memory_candidates**：
+
+1. **[project] go-excelize Import 端到端 benchmark 噪声形态**：wall-clock 在 count=5 独立采样下 100k 档噪声可达 ±32%（3.86~5.10s），中位甚至 -13% 倒退；而 allocs/op 方差 <0.001%。性能验收对端到端 Import 应以 allocs/op + FillStruct 微基准为主证，wall-clock 仅 noise-sensitive 辅证，单机热节流下不可作门槛唯一判据。
+2. **[project] go-excelize 预存在 gofmt 债**：`scanner.go` 的 `RelationResolver` 结构体字段对齐 + 文件尾空行在 base `c35b0dc` 即存在，非本轮引入；建议单独 chore 修复，避免与性能改动混入同一 diff 造成归因混乱。
