@@ -98,25 +98,18 @@ func (e export) ColumnWidths() map[string]float64 {
 
 #### 定义列样式
 ```go
-func (e export) Style() map[string]*excelize.Style {
-    return map[string]*excelize.Style{
-        "A": &excelize.Style{
-            Font: &excelize.Font{
-                Bold: true,
-            },
-        },
+func (e export) Style() map[string]Style {
+    return map[string]Style{
+        "A": NewCustomFormat(DecimalFormat),
     }
 }
 ```
 
 #### 定义数据验证
 ```go
-func (e export) DataValidation() map[string]*excelize.DataValidation {
-    return map[string]*excelize.DataValidation{
-        "A": &excelize.DataValidation{
-            Type: "list",
-            Formula1: `"男,女"`,
-        },
+func (e export) DataValidation() map[string]DataValidate {
+    return map[string]DataValidate{
+        "A": NewDropValidate([]string{"男", "女"}),
     }
 }
 ```
@@ -148,4 +141,51 @@ func (e export) Sheets() map[string]Sheet {
         "Sheet1": &Sheet1{},
     }
 }
+```
+
+### 导出配置（functional options）
+
+`NewExporterWithOptions` 以函数参数注入导出级样式/列宽/数据验证，避免逐一实现 `Style()`/`ColumnWidths()`/`DataValidation()` 接口方法。三类 Option 作用于整个导出的所有 sheet；当某个 sheet 自己实现了对应接口方法时，sheet 级配置覆盖导出级默认。
+
+```go
+exporter := NewExporterWithOptions("./report.xlsx",
+    WithStyle(map[string]Style{"A": NewDecimalFormat()}),
+    WithColumnWidth(map[string]float64{"A": 10, "B": 20}),
+    WithDataValidate(map[string]DataValidate{"A": NewDropValidate([]string{"男", "女"})}),
+)
+```
+
+> 三个 Option 分别等价于 `WithStyles.Style()`、`WithColumnWidths.ColumnWidths()`、`WithDataValidation.DataValidation()` 接口方法的配置能力，参数类型完全一致。
+
+### 裸数据直接导出（NewSheet）
+
+`NewSheet(headers, rows)` 免手写结构体，直接以表头 + 数据行构造一个 `Sheet`。它仅承载数据，不含样式/列宽/数据验证能力——这些配置只能通过上面的导出级 Option 注入。
+
+单 sheet 导出（零结构体定义）：
+
+```go
+exporter := NewExporter("./data.xlsx")
+exporter.Export(NewSheet(
+    []interface{}{"ID", "Name"},
+    [][]interface{}{{"1", "张三"}, {"2", "李四"}},
+))
+```
+
+多 sheet 组合（作为 `map[string]Sheet` 的值）：
+
+```go
+type multi struct{}
+func (m multi) Sheets() map[string]Sheet {
+    return map[string]Sheet{
+        "用户": NewSheet(
+            []interface{}{"ID", "Name"},
+            [][]interface{}{{"1", "张三"}},
+        ),
+        "订单": NewSheet(
+            []interface{}{"ID", "金额"},
+            [][]interface{}{{"1001", 99.5}},
+        ),
+    }
+}
+exporter.Export(&multi{})
 ```
