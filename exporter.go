@@ -6,8 +6,9 @@ import (
 )
 
 type Exporter struct {
-	f    *excelize.File
-	path string
+	f      *excelize.File
+	path   string
+	config *exportConfig
 }
 
 func (ex Exporter) Close() error {
@@ -59,16 +60,28 @@ func (ex Exporter) createSheet(s Sheet, n string) error {
 		if err := ex.setStyle(n, sty); err != nil {
 			return err
 		}
+	} else if ex.config != nil && ex.config.styles != nil {
+		if err := ex.setStyleByMap(n, ex.config.styles); err != nil {
+			return err
+		}
 	}
 
 	if cw, ok := s.(WithColumnWidths); ok {
 		if err := ex.setColWidth(n, cw); err != nil {
 			return err
 		}
+	} else if ex.config != nil && ex.config.columnWidths != nil {
+		if err := ex.setColWidthByMap(n, ex.config.columnWidths); err != nil {
+			return err
+		}
 	}
 
 	if v, ok := s.(WithDataValidation); ok {
 		if err := ex.setDataValidation(n, v); err != nil {
+			return err
+		}
+	} else if ex.config != nil && ex.config.dataValidate != nil {
+		if err := ex.setDataValidationByMap(n, ex.config.dataValidate); err != nil {
 			return err
 		}
 	}
@@ -113,6 +126,50 @@ func (ex Exporter) setDataValidation(name string, e WithDataValidation) error {
 	return nil
 }
 
+// setColWidthByMap is the export-level (map-direct) form of setColWidth. It
+// shares the exact per-entry logic with setColWidth so both code paths produce
+// identical output.
+func (ex Exporter) setColWidthByMap(name string, widths map[string]float64) error {
+	for idx, w := range widths {
+		from, to := expandSqref(idx)
+
+		if err := ex.f.SetColWidth(name, from, to, w); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// setStyleByMap is the export-level (map-direct) form of setStyle, sharing its
+// per-entry logic.
+func (ex Exporter) setStyleByMap(name string, styles map[string]Style) error {
+	for idx, style := range styles {
+		styleId, err := ex.f.NewStyle(style.FormatStyle())
+		if err != nil {
+			return err
+		}
+
+		if err = ex.f.SetColStyle(name, idx, styleId); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// setDataValidationByMap is the export-level (map-direct) form of
+// setDataValidation, sharing its per-entry logic.
+func (ex Exporter) setDataValidationByMap(name string, validations map[string]DataValidate) error {
+	for idx, v := range validations {
+		if err := ex.f.AddDataValidation(name, v.FormatDataValidate(idx)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (ex Exporter) writeData(name string, s Sheet) error {
 	var rows [][]interface{}
 	if h, ok := s.(WithHeading); ok {
@@ -132,5 +189,5 @@ func (ex Exporter) writeData(name string, s Sheet) error {
 }
 
 func NewExporter(p string) *Exporter {
-	return &Exporter{f: excelize.NewFile(), path: p}
+	return &Exporter{f: excelize.NewFile(), path: p, config: &exportConfig{}}
 }
