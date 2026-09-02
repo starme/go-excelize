@@ -1,14 +1,14 @@
 {
-  "task_id": "go-excelize-p2-export-ergonomics-and-gof-7cfc39",
-  "run_id": "20260901-124632-be7e42",
+  "task_id": "go-excelize-v2-import-stream-and-generic-669354",
+  "run_id": "20260901-162753-323a10",
   "project_root": "/Users/tal/projects/go/packages/go-excelize",
-  "task_root": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39/.devflow",
-  "worktree": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39",
-  "branch": "feature/go-excelize-p2-export-ergonomics-and-gof-7cfc39",
-  "base_commit": "f033ed0374babe19792400ea05b8bc5e22a625f3",
+  "task_root": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-v2-import-stream-and-generic-669354/.devflow",
+  "worktree": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-v2-import-stream-and-generic-669354",
+  "branch": "feature/go-excelize-v2-import-stream-and-generic-669354",
+  "base_commit": "bbbcc983928bb1db24555bcae7d3d2729215c31e",
   "phase": "done",
   "agent": "manager",
   "adapter": "claude-code",
   "adapter_capability": "hard",
-  "cwd": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39"
+  "cwd": "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-v2-import-stream-and-generic-669354"
 }

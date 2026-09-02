@@ -2,8 +2,11 @@ package excelize
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"iter"
 	"mime/multipart"
+	"reflect"
 	"strings"
 	"sync"
 )
@@ -71,6 +74,71 @@ func (i Importer) Import(e Excel) (err error) {
 	}
 
 	return nil
+}
+
+// ImportStream 流式逐行导入。返回 iter.Seq2，逐行 yield 解析后的 struct 指针（*T，interface{} 包装），
+// err 非 nil 时为整体错误（终止迭代）。仅支持单 sheet：接到 WithMultipleSheets 返回整体错误。
+// 不触发 Collection。提前 break / 耗尽 / panic 时资源由生成器内部 defer 确定性释放。
+func (i Importer) ImportStream(e Excel) iter.Seq2[interface{}, error] {
+	return func(yield func(interface{}, error) bool) {
+		if i.reader == nil {
+			yield(nil, fmt.Errorf("reader is not initialized"))
+			return
+		}
+
+		// 多 sheet 不支持流式：单个 iter.Seq2 只 yield 一个 V，无 sheet 名通道，
+		// 调用方无法判断当前行属于哪个 sheet。多 sheet 全量仍走 Import/ImportConcurrent。
+		if _, ok := e.(WithMultipleSheets); ok {
+			yield(nil, errors.New("ImportStream supports a single sheet only; use Import for multiple sheets"))
+			return
+		}
+
+		// 释放底层文件：覆盖 break（调用方停止消费）、正常耗尽、panic 三路径，
+		// 与 Import 的 defer i.reader.close() 资源语义对齐。
+		defer func() { _ = i.reader.close() }()
+
+		name, explicit := i.sheetNameFor(e)
+		resolved, err := i.reader.resolveSheetName(name, explicit)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+
+		// 表头校验（WithHeading）与 skip 前缀复用 imp 的既有语义。
+		if h, ok := e.(WithHeading); ok {
+			header, herr := i.reader.GetHeader(resolved)
+			if herr != nil {
+				yield(nil, newValidateHeaderError(resolved, herr))
+				return
+			}
+			if verr := i.validateHeader(h.Headers(), header); verr != nil {
+				yield(nil, newValidateHeaderError(resolved, verr))
+				return
+			}
+		}
+		if s, ok := e.(WithSkip); ok {
+			i.reader.withSkip(s.Skip(resolved))
+		}
+
+		// 目标必须是 *[]T，据此推导元素类型 T 用于构造每个 yield 的 *T。
+		rv := reflect.ValueOf(e)
+		if rv.Kind() != reflect.Pointer || rv.IsNil() {
+			yield(nil, &InvalidUnmarshalError{reflect.TypeOf(e)})
+			return
+		}
+		slice := rv.Elem()
+		if slice.Kind() != reflect.Slice {
+			yield(nil, &InvalidUnmarshalError{slice.Type()})
+			return
+		}
+		elementType := slice.Type().Elem()
+
+		s := newScanner(i.reader, resolved)
+		if serr := s.scanStream(elementType, yield); serr != nil {
+			yield(nil, serr)
+			return
+		}
+	}
 }
 
 // sheetNameFor 返回 sheet 的逻辑名与是否显式（WithSheetName 提供则显式）。

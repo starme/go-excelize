@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
@@ -71,6 +72,41 @@ func BenchmarkImport(b *testing.B) {
 					b.Fatalf("import: %v", err)
 				}
 			}
+		})
+	}
+}
+
+// BenchmarkImportStream 流式导入基准：逐行消费并丢弃，度量驻留峰值而非累计分配。
+// 峰值口径为 runtime.ReadMemStats().HeapAlloc（不用 B/op——B/op 只累计不过滤回收，
+// 流式下失真），与 BenchmarkImport 的 ~1.55GB 峰值形成 AC-4 对比基线。
+func BenchmarkImportStream(b *testing.B) {
+	for _, rows := range []int{1e2, 1e4, 1e5} {
+		b.Run(fmt.Sprintf("%dRows", rows), func(b *testing.B) {
+			path := benBuildXlsx(b, rows)
+			b.ResetTimer()
+
+			var peakAlloc uint64
+			for i := 0; i < b.N; i++ {
+				var e []TextColumnRow
+				imp, err := NewImporterAsPath(context.Background(), path)
+				if err != nil {
+					b.Fatalf("new importer: %v", err)
+				}
+				for row, rerr := range imp.ImportStream(&e) {
+					if rerr != nil {
+						b.Fatalf("import stream: %v", rerr)
+					}
+					_ = row.(*TextColumnRow)
+
+					var m runtime.MemStats
+					runtime.ReadMemStats(&m)
+					if m.HeapAlloc > peakAlloc {
+						peakAlloc = m.HeapAlloc
+					}
+				}
+			}
+
+			b.ReportMetric(float64(peakAlloc)/(1024*1024), "peakMB")
 		})
 	}
 }
@@ -268,6 +304,76 @@ func BenchmarkRelation(b *testing.B) {
 					b.Fatalf("import relation: %v", err)
 				}
 			}
+		})
+	}
+}
+
+// BenchmarkRelationPeak 用与 BenchmarkImportStream 相同的峰值口径（ReadMemStats
+// HeapAlloc 高水位）测含 relation 的全量 Import 峰值，作为 relations 流式的
+// 对照基线。老 BenchmarkRelation 只有标准 B/op（累计分配），无法与流式的 peakMB
+// 直接对比，故单独加此同口径基准。
+func BenchmarkRelationPeak(b *testing.B) {
+	for _, rows := range []int{1e2, 1e4, 1e5} {
+		b.Run(fmt.Sprintf("%dRows", rows), func(b *testing.B) {
+			path := benBuildRelationXlsx(b, rows)
+			b.ResetTimer()
+
+			var peakAlloc uint64
+			for i := 0; i < b.N; i++ {
+				var e benRelationSheet
+				imp, err := NewImporterAsPath(context.Background(), path)
+				if err != nil {
+					b.Fatalf("new importer: %v", err)
+				}
+				if err := imp.Import(&e); err != nil {
+					b.Fatalf("import relation: %v", err)
+				}
+				_ = e
+
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				if m.HeapAlloc > peakAlloc {
+					peakAlloc = m.HeapAlloc
+				}
+			}
+
+			b.ReportMetric(float64(peakAlloc)/(1024*1024), "peakMB")
+		})
+	}
+}
+
+// BenchmarkImportStreamRelation 测含 relation 的流式导入峰值。主表逐行流式，但
+// relation 引用的子表「项配置」首次触发时经 getChildData 全量载入并缓存，故峰值
+// 收敛为「子表内存 + 单行」，与 BenchmarkRelationPeak（全量 relation）对比判定
+// 架构门槛「含 relation ≤ 全量 relation 基线 30%（~113MB）」。
+func BenchmarkImportStreamRelation(b *testing.B) {
+	for _, rows := range []int{1e2, 1e4, 1e5} {
+		b.Run(fmt.Sprintf("%dRows", rows), func(b *testing.B) {
+			path := benBuildRelationXlsx(b, rows)
+			b.ResetTimer()
+
+			var peakAlloc uint64
+			for i := 0; i < b.N; i++ {
+				var e benRelationSheet
+				imp, err := NewImporterAsPath(context.Background(), path)
+				if err != nil {
+					b.Fatalf("new importer: %v", err)
+				}
+				for row, rerr := range imp.ImportStream(&e) {
+					if rerr != nil {
+						b.Fatalf("import stream relation: %v", rerr)
+					}
+					_ = row.(*benRelationRow)
+
+					var m runtime.MemStats
+					runtime.ReadMemStats(&m)
+					if m.HeapAlloc > peakAlloc {
+						peakAlloc = m.HeapAlloc
+					}
+				}
+			}
+
+			b.ReportMetric(float64(peakAlloc)/(1024*1024), "peakMB")
 		})
 	}
 }

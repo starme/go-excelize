@@ -1,18 +1,18 @@
 schema_version: 1
 
 task:
-  id: "go-excelize-p2-export-ergonomics-and-gof-7cfc39"
-  slug: "go-excelize-p2-export-ergonomics-and-gof"
+  id: "go-excelize-v2-import-stream-and-generic-669354"
+  slug: "go-excelize-v2-import-stream-and-generic"
   kind: "feature"
-  description: "继续 P2 优雅性实施（P2-1 NewExporterWithOptions + P2-2 NewSheet helper，依据 docs/optimization-analysis.md）+ 附带清理 scanner.go 预存在 gofmt 债；P2-3/P2-4 偏 v2 本轮排除"
+  description: "启动 v2 项：P2-3 ImportStream 流式导入（峰值内存 O(n)→O(字段)，涉 reader 生命周期与 skip/relation 语义重构）+ P2-4 ImportOf[T] 泛型导入（编译期类型检查），依据 docs/optimization-analysis.md P2-3/P2-4"
   current_phase: "done"
   status: "active"
 
 git:
   base_ref: "main"
-  base_commit: "f033ed0374babe19792400ea05b8bc5e22a625f3"
-  branch: "feature/go-excelize-p2-export-ergonomics-and-gof-7cfc39"
-  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39"
+  base_commit: "bbbcc983928bb1db24555bcae7d3d2729215c31e"
+  branch: "feature/go-excelize-v2-import-stream-and-generic-669354"
+  worktree: "/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-v2-import-stream-and-generic-669354"
 
 parent_task_id: null
 source_task_id: null
@@ -25,7 +25,7 @@ workflow:
     - backend
 
 artifacts:
-  prd: "docs/prd-p2-export-ergonomics.md"
+  prd: "docs/prd-v2-import-stream-generics.md"
   architecture: null
   scope: ".devflow/scope.yaml"
   test_reports:

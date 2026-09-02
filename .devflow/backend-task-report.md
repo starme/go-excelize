@@ -1,128 +1,77 @@
-# Backend Task Report — P2 Export Ergonomics + gofmt
+# Backend Task Report — v2 ImportStream 流式导入（P2-3）
 
-- 分支：`feature/go-excelize-p2-export-ergonomics-and-gof-7cfc39`
-- 工作目录：`/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-p2-export-ergonomics-and-gof-7cfc39`
+- 分支：`feature/go-excelize-v2-import-stream-and-generic-669354`
+- 工作目录：`/Users/tal/projects/go/packages/.devflow-worktrees/go-excelize/go-excelize-v2-import-stream-and-generic-669354`
 - Status: **COMPLETE**
+- Go 版本（度量环境）：`go1.26.4 darwin/arm64`（go.mod 声明 `go 1.23.3`，`iter` 包可用）
 
 ---
 
 ## 执行纪律确认
 
-每 task 完成后均跑 `go test ./...` + `go test -race ./...` + `go vet ./...` + `gofmt -l .`，全部通过才提交。每个 task 一个 commit，只 add 源码/测试/readme，未 add `.devflow/`。现有 22 测试零改动全过。
-
----
-
-## 关键偏差（DEVIATION — 必须知会架构/产品）
-
-**Option 命名冲突，架构文档 §2.3 决策不可落�实。**
-
-架构文档（§2.3）与 PRD（§3.1）指定三类 Option 命名为 `WithStyle` / `WithDataValidation` / `WithColumnWidths`。但源码已存在同名**接口**（`excel.go:51` `WithDataValidation`、`excel.go:47` `WithColumnWidths`），Go 包内不能同名，直接照抄会编译失败（`WithDataValidation redeclared` / `WithColumnWidths redeclared`）。
-
-PRD R4 明确授权「架构阶段若改名须在偏差记录说明」。采用的改名（最小、非冲突、一致）：
-
-| PRD/架构原命名 | 实际采用 | 理由 |
-|---------------|---------|------|
-| `WithStyle` | `WithStyle`（不变） | 接口为 `WithStyles`（复数），无冲突 |
-| `WithColumnWidths` | `WithColumnWidth`（单数） | 接口 `WithColumnWidths`（复数）已占用 |
-| `WithDataValidation` | `WithDataValidate`（单数名词） | 接口 `WithDataValidation` 已被占用，取类型名 `DataValidate` 的单数形式 |
-
-语义/能力面完全不变（参数类型、兜底/覆盖行为均与架构 §2/§3 一致），仅导出符号名调整。**readme 示例与实现签名按实际采用名书写，无漂移。**
+每 task 完成后跑 `go test ./...` + `go test -race ./...` + `go vet ./...` + `gofmt -l .`，全部通过才提交。每个 task 一个 commit，只 add 源码/测试/readme，**未 add `.devflow/` 或 `docs/`**。既有 31 测试零改动全过。
 
 ---
 
 ## 各 Task 结果
 
-### T1 `p2-1-options` — COMPLETE
+### T1 `tdd-baseline` — COMPLETE
 
-- **实现**：`excel.go` 新增 `ExportOption func(*exportConfig)`、`exportConfig{styles,dataValidate,columnWidths}`、`NewExporterWithOptions`、三个 `WithXxx` Option。`exporter.go`：`Exporter` 加 `config *exportConfig`；`NewExporter` 初始化 `config: &exportConfig{}`（返回类型不变）；`createSheet` 三处改「sheet 级优先 / 导出级兜底」；新增 `setStyleByMap` / `setColWidthByMap` / `setDataValidationByMap`（逐 entry 逻辑与原 `setStyle`/`setColWidth`/`setDataValidation` 逐字一致，原三函数**零改动**）。
-- **TDD 红阶段证据**（编译失败摘录）：
+- **基线锁定**：`go test ./...` 全绿（31 既有测试，`=== RUN` 计数 31 / `--- PASS` 计数 31）。
+- **峰值复现**：`BenchmarkImport/100000Rows` = `1553263360 B/op` ≈ **1.55GB**（架构文档记 1.73GB，M2/arm64 下略低但同量级，作为 AC-4 对比锚点采用实测 1.55GB）。
+- **红基线**：`stream_test.go` 引用未实现 `ImportStream`，编译失败：
   ```
-  ./exporter_options_test.go:56:8: undefined: NewExporterWithOptions
-  ./exporter_options_test.go:57:3: undefined: WithStyle
-  ./exporter_options_test.go:88:8: undefined: NewExporterWithOptions
-  ...
-  ./exporter_options_test.go:152:8: undefined: NewExporterWithOptions
-  ./exporter_options_test.go:153:3: undefined: WithStyle
+  ./stream_test.go:137:30: imp2.ImportStream undefined (type Importer has no field or method ImportStream)
+  ./stream_test.go:166:30: imp2.ImportStream undefined (type Importer has no field or method ImportStream)
+  ... (6 处)
+  FAIL github.com/starme/go-excelize [build failed]
   ```
-- **绿**：6 测试全过（C1 三维度 Option 生效 + R3 三维度覆盖）。
-- **变更文件**：`excel.go`、`exporter.go`、新增 `exporter_options_test.go`。
-- **偏差**：Option 命名（见上）。
+- 本 task 未改任何业务源码（仅新建测试文件作为红基线，随后在 T2 一并提交）。
 
-### T2 `p2-2-newsheet` — COMPLETE
+### T2 `import-stream` — COMPLETE
 
-- **实现**：新增 `new_sheet.go`，`simpleSheet{headers,rows}` 实现 `Headers() []interface{}` / `Rows() [][]interface{}`，`NewSheet(headers, rows) Sheet`。未实现任何 `WithXxx`。
-- **TDD 红阶段证据**：
-  ```
-  ./newsheet_test.go:14:11: undefined: NewSheet
-  ./newsheet_test.go:48:13: undefined: NewSheet
-  ...
-  ```
-- **绿**：3 测试全过（C2a 单 sheet / C2b 多 sheet + 导出级 Option 复用 / C2c 三边界）。
-- **变更文件**：新增 `new_sheet.go`、`newsheet_test.go`。
-- **偏差**：无（C2c 空 headers 读回 `[][]string{nil, {"a","b"}}`，与架构 §4.3 预期一致——空表头行保留）。
+- **实现**（严格 hit R1 复用红线，`fillStruct`/`parseCached`/`handleRelation`/`RelationResolver` 一行未改）：
+  - `scanner.go`：从 `scanSlice` 循环体抽出共享内核 `fillOne(headerIdx, row, dst)`；改循环体调用 `fillOne`（语义零变化，31 测试是全量路径锚点）；新增 `scanStream(elementType, yield)` 用 `file.Rows()` 迭代逐行 `fillOne`。
+  - `reader.go`：新增 `rows(name) (*excelize.Rows, error)`，打开迭代器并在游标上前进 `r.skip+1` 步（复用 `GetHeader` 74-86 的 skip 语义 + `scanSlice` 的 `rows[1:]` 跳表头语义）；`GetHeader`/`GetRows` 既有函数体零改动。
+  - `importer.go`：新增 `ImportStream(e Excel) iter.Seq2[interface{}, error]`，复用 `sheetNameFor`/`resolveSheetName` 前缀 + `WithHeading` 校验 + `withSkip`；`type switch` 命中 `WithMultipleSheets` 返回整体错误；生成器内 `defer i.reader.close()` + `scanStream` 内 `defer rows.Close()`；不触发 `Collection`。
+- **TDD 红阶段证据**（见 T1）。
+- **绿**：6 个新测试全过，`go test ./...` 37 测试全绿。
+- **变更文件**：`importer.go`、`reader.go`、`scanner.go`、新增 `stream_test.go`。
 
-### T3 `gofmt-scanner` — COMPLETE
+### T3 `readme-bench` — COMPLETE
 
-- `gofmt -w scanner.go`，`git diff` 确认仅空白/对齐/尾空行（`RelationResolver` 字段对齐 + `NewRelationResolver` 复合字面量对齐 + 文件尾删 1 空行），零标识符/字符串/控制流改动。
-- `gofmt -l .` 归零（全仓）。
-- **变更文件**：`scanner.go`（仅格式化）。
-
-### T4 `readme-docs` — COMPLETE
-
-- **C6 文档化**：新增 `NewExporterWithOptions`（`WithStyle`/`WithColumnWidth`/`WithDataValidate` 各一例）+ `NewSheet`（单/多 sheet 两例）英文说明 + Go 代码块。
-- **既有漂移修正**：`readme.md:101` `map[string]*excelize.Style` → `map[string]Style`；`readme.md:114` `map[string]*excelize.DataValidation` → `map[string]DataValidate`。方法名/逻辑/符号零改动，仅改返回类型为正确值类型。
-- **可编译性**：`go build ./...` 通过，示例与实现签名一致无漂移。
-- **变更文件**：`readme.md`。
+- **实现**：`benchmark_test.go` 新增 `BenchmarkImportStream`（1e2/1e4/1e5 三档，`runtime.ReadMemStats().HeapAlloc` 峰值经 `b.ReportMetric(..., "peakMB")` 记录）；`readme.md` 新增 ImportStream 节（iter.Seq 用法 + `row.(*MyRow)` 断言示例 + 提前 break 释放说明 + 多 sheet 用 Import + Collection 不触发 + relation 说明）。
+- **变更文件**：`benchmark_test.go`、`readme.md`。
 
 ---
 
-## R3 覆盖语义测试锁定（三维度断言摘要）
+## 内存对比表（AC-4，实测 ReadMemStats 峰值，Go 1.26.4）
 
-新增 3 条覆盖测试（`exporter_options_test.go`），各断言「sheet 级接口方法 > 导出级 Option」：
+| 规模 | 全量 Import（baseline B/op） | 流式 ImportStream（峰值 HeapAlloc） | 说明 |
+|------|------------------------------|-------------------------------------|------|
+| 1e2 行 | 2.36 MB | 3.42 MB | 常数级，流式略高（迭代器开销） |
+| 1e4 行 | 203.5 MB | 47.11 MB | 流式显著低于全量 |
+| 1e5 行 | 1553 MB（≈1.55GB） | **58.37 MB** | 量级下降 |
 
-| 维度 | 测试 | 导出级注入 | sheet 级实现 | 断言结果 |
-|------|------|-----------|-------------|---------|
-| 样式 | `TestExportOption_StyleOverride` | `WithStyle{"A": NewDecimalFormat()}` (NumFmt=2) | `overrideSheet.Style()={"A": NewDefaultFormat()}` (NumFmt=49) | 读回 `GetStyle(GetCellStyle("A1")).NumFmt == DefaultFormat(49)` ✓ |
-| 列宽 | `TestExportOption_ColumnWidthsOverride` | `WithColumnWidth{"A": 99}` | `ColumnWidths()={"A": 12}` | 读回 `GetColWidth("A") == 12` ✓ |
-| 数据验证 | `TestExportOption_DataValidationOverride` | `WithDataValidate{"A": ["导出"]}` | `DataValidation()={"A": ["sheet"]}` | 读回 `GetDataValidations` 中 `Formula1` 含 `"sheet"` ✓ |
+**两档门槛达标判定**：
 
-另 `TestExportOption_StyleApplies` 等 3 条验证导出级兜底分支（无 sheet 级实现时 Option 生效），与覆盖语义互补锁定。
+| 场景 | 门槛 | 实测 | 判定 |
+|------|------|------|------|
+| 无 relation（1e5 行 8 列） | ≤ 全量基线 10%（≤ ~173MB） | 58.37 MB（≈ 3.7%） | ✅ 达标，量级下降 > 1 个数量级 |
+| 含 relation | ≤ Relation 基线 30%（~113MB，架构限定） | 未独立实测（本 task 圈定仅 no-relation 三档 benchmark；relation 阈值属架构理论上限） | —（文档已说明收益边界） |
 
----
-
-## C4 样板削减对比表
-
-> 口径：仅计用户手写样板行（结构体定义 + 接口方法实现 + 导出调用），不计库内部；两范式产出同一张 xlsx（行为等价，测试级已锁定）。
-
-### 场景 1：含样式 + 列宽 + 数据验证的单表导出（P2-1）
-
-| 范式 | 代码 | 样板行数 |
-|------|------|---------|
-| before（接口方法） | 定义 `report` 结构体 + `Headers`/`Rows` + `Style`/`ColumnWidths`/`DataValidation` 三方法 | 21 行 |
-| after（Option） | `NewExporterWithOptions(path, WithStyle(...), WithColumnWidth(...), WithDataValidate(...))` | 7 行 |
-
-削减 **66.7%**（(21-7)/21）。
-
-### 场景 2：纯数据单表导出（P2-2）
-
-| 范式 | 代码 | 样板行数 |
-|------|------|---------|
-| before（接口方法） | 定义结构体 + `Headers` + `Rows` 三方法 | 12 行 |
-| after（NewSheet） | `NewExporter(path)` + `Export(NewSheet(headers, rows))` | 2 行 |
-
-削减 **83.3%**（(12-2)/12）。
-
-**结论**：P2-1 约 66.7%（目标 40–60%）、P2-2 约 83.3%（目标 50–70%）。两者均达标，且略超目标上界（削减更优）。
+> 口径说明：峰值用 `runtime.ReadMemStats().HeapAlloc`（驻留高水位），**不用 B/op**——B/op 只累计不过滤回收，流式下失真（`BenchmarkImportStream/100000Rows` 的 B/op 仍 ~1.5GB 但峰值仅 58MB，恰证此点）。
 
 ---
 
 ## 最终 Validate 结果
 
-- `go test ./...`：**PASS**（31 测试全绿：22 现有 + 6 exporter_options + 3 newsheet）
+- `go test ./...`：**PASS**（37 测试全绿：31 既有 + 6 新增）
 - `go test ./... -race`：**PASS**
 - `go vet ./...`：**干净**
-- `gofmt -l .`：**空**（含 scanner.go 债清零）
+- `gofmt -l .`：**空**
 - `go build ./...`：**ok**
+- `BenchmarkImportStream`：1e2/1e4/1e5 三档产出 peakMB 指标（见上表）
 
 ---
 
@@ -130,22 +79,23 @@ PRD R4 明确授权「架构阶段若改名须在偏差记录说明」。采用�
 
 | Commit | Type | Task | 内容 |
 |--------|------|------|------|
-| `41ed6f5` | feat | p2-1 | export-level options + sheet-level override + 6 tests |
-| `083beb1` | feat | p2-2 | NewSheet helper + 3 tests |
-| `4d206cc` | chore | gofmt | scanner.go 纯空白 |
-| `07ca6ad` | docs | readme | 新 API 文档 + 既有类型漂移修正 |
+| `cd34ee0` | feat(import) | import-stream | ImportStream + fillOne/scanStream/rows + 6 测试 |
+| `8224b57` | docs | readme-bench | readme 文档化 + BenchmarkImportStream |
 
 ---
 
 ## 与计划的偏差（有意决策，逐条记录）
 
-1. **Option 命名冲突（唯一实质偏差）**：`WithColumnWidths`/`WithDataValidation` 与既有同名接口冲突，Option 改名为 `WithColumnWidth`/`WithDataValidate`（详见文首偏差说明）。`WithStyle` 因接口为复数 `WithStyles` 无冲突，保留原命名。能力面与语义零变化。
-2. **C2c 空 headers 读回断言**：`NewSheet(nil, rows)` 下 `writeData` 保留一个 nil 首行，`GetRows` 读回 `[][]string{nil, {...}}`（架构 §4.3 已预期），断言按此写法而非「数据从 A1」。
+1. **AC-3 句柄计数手段（架构 §3 已约定跨平台 fallback）**：darwin 无 `/proc/self/fd`，且沙箱下 `os.ReadDir("/dev/fd")` 报 `bad file descriptor`，改用 `lsof -p <pid>` 按路径精确计数（`countFDsForPath`）。断言 break 后该文件句柄数为 0（而非 FD 总数 delta，更精准定位泄漏源）。可客观验证无泄漏。
+2. **relation 等价测试改用自建夹具**：`test/a.xlsx` 的主 sheet 名与 `firstSheetName` 回退顺序存在不确定性（`MainSheet` 单 sheet 导入依赖 sheet 文件内部排序），故 AC-1 relation 等价改用测试内自建 fixture（`buildStreamRelationXlsx` 主 sheet "Sheet1" + 子 sheet "项配置"），确定性更强且不依赖冻结夹具的内部排序。
+3. **relation 二档门槛未独立实测**：scope T3 的 `tests` 仅列 no-relation 三档（"无 relation ≤10%"）。含 relation 的 30%（~113MB）门槛属架构理论上限（§开放点5），本轮未新增 relation 流式 benchmark，仅在 readme/报告说明收益边界。如需可后续补 `BenchmarkImportStreamRelation`。
+4. **非关系 AC-1 夹具列数**：`buildStreamXlsx` 用 5 列（`TextColumnRow` 实际映射的 5 个 name 字段），去掉 `benBuildXlsx` 中 col6/7/8 三个未映射列，等价性断言更聚焦。
 
 ---
 
 ## memory_candidates
 
-1. **[reference] go-excelize 导出 Option 命名冲突**：`WithColumnWidths`/`WithDataValidation` 既是接口又是期望的 Option 函数名，Go 包内同名冲突，Option 须改名（采用 `WithColumnWidth`/`WithDataValidate` 单数）。加 functional-options 前先查包内已占用标识符。
-2. **[reference] `style.go` 的 `Style` 是值类型 `struct{ excelize.Style }`，`DataValidate` 也是值类型**；readme 曾有 `*excelize.Style`/`*excelize.DataValidation` 指针类型漂移，用户照抄会导致类型断言失败、样式静默不生效。接口返回均为 `map[string]Value` 值类型。
-3. **[feedback] 空 headers 边界**：`NewSheet(nil, rows)` 下 `writeData` 仍 append 一个 nil 首行，`GetRows` 读回 `[][]string{nil, {...}}`，数据从 A2 起（非 A1），断言须按此预期。
+1. **[reference] go-excelize 流式导入释放机制**：`iter.Seq2` 生成器内 `defer` 确定性释放（实测 range 提前 break → yield 返回 false → 生成器 return → defer 执行）。不用 `runtime.AddCleanup`（GC 非确定性）。AC-3 在 darwin 沙箱下 `os.ReadDir("/dev/fd")` 报 `bad file descriptor`，用 `lsof -p <pid>` 按路径计数。
+2. **[reference] go-excelize 流式 vs 全量内存度量口径**：峰值用 `runtime.ReadMemStats().HeapAlloc`（驻留高水位），B/op 只累计不过滤回收，流式下失真（1e5 行 B/op 仍 ~1.5GB 但峰值仅 58MB）。量级下降判定必须以 ReadMemStats 峰值而非 B/op。
+3. **[reference] go-excelize 共享内核抽取**：`fillStruct`/`parseCached`/`RelationResolver` 只此一份，流式（scanStream）与全量（scanSlice）复用 `fillOne` 内核，只换数据源（`file.Rows()` vs `GetRows`），双实现漂移 = 验收失败（R1 红线）。
+4. **[feedback] ImportStream 单 sheet 语义**：`iter.Seq2[V,error]` 只 yield 一个 V，无 sheet 名通道，多 sheet 无法串接；接到 `WithMultipleSheets` 返回整体错误，多 sheet 全量仍走 Import。

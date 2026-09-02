@@ -388,8 +388,51 @@ func (s *scanner) scanSlice(rv reflect.Value) error {
 		if i >= rv.Len() {
 			rv.SetLen(i + 1)
 		}
-		if err = s.fieldMapper.fillStruct(row, headerIdx, rv.Index(i), s.handleRelation); err != nil {
+		if err = s.fillOne(headerIdx, row, rv.Index(i)); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// fillOne 把单行 row 填充进 dst（slice 的第 index 元素或流式的单个 struct），共享 fillStruct 语义。
+// scanSlice（全量）与 scanStream（流式）复用此内核，杜绝双实现漂移（R1 复用红线）。
+func (s *scanner) fillOne(headerIdx map[string]int, row []string, dst reflect.Value) error {
+	return s.fieldMapper.fillStruct(row, headerIdx, dst, s.handleRelation)
+}
+
+// scanStream 通过流式 Rows 迭代器逐行读取数据并 yield 解析后的 *T。它复用了
+// fillOne/fillStruct/RelationResolver，仅把数据源从 GetRows（全量 [][]string）换成
+// file.Rows() 迭代器（逐行），解析语义与 scanSlice 完全一致。
+// elementType 是目标 struct 类型；yield 的 V 为该 struct 的指针（*T，interface{} 包装）。
+// yield 返回 false 表示调用方提前 break，扫描立即终止并返回 nil（释放由调用方 defer 负责）。
+func (s *scanner) scanStream(elementType reflect.Type, yield func(interface{}, error) bool) error {
+	header, err := s.reader.GetHeader(s.sheet)
+	if err != nil {
+		return err
+	}
+
+	rows, err := s.reader.rows(s.sheet)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	headerIdx := buildHeaderIndex(header)
+	for rows.Next() {
+		cols, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		dst := reflect.New(elementType).Elem()
+		if err := s.fillOne(headerIdx, cols, dst); err != nil {
+			return err
+		}
+
+		if !yield(dst.Addr().Interface(), nil) {
+			return nil
 		}
 	}
 

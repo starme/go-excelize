@@ -1,106 +1,147 @@
-# 验收报告 — go-excelize P2 优雅性（导出 API 体验 + gofmt 债清理）
+# 验收报告 — v2 ImportStream 流式导入（P2-3）
 
-> 验收对象：`feature/go-excelize-p2-export-ergonomics-and-gof-7cfc39`（base `f033ed0`，HEAD `07ca6ad`，4 commits：`41ed6f5` feat(p2-1) / `083beb1` feat(p2-2) / `4d206cc` chore(gofmt) / `07ca6ad` docs(readme)）
-> PRD 依据：`docs/prd-p2-export-ergonomics.md` §5 验收标准（C1–C6）+ §6 风险（R1–R5）
-> 证据三源：测试 Agent 报告（`.devflow/test-report.md` round 1 ALL GREEN）、研发实现报告（`.devflow/backend-task-report.md`）、产品 Agent 独立实查
+> 验收对象：`feature/go-excelize-v2-import-stream-and-generic-669354`（base `bbbcc98`，HEAD `8224b57`，2 commits：`cd34ee0` feat(import) / `8224b57` docs(readme-bench)）
+> PRD 依据：`docs/prd-v2-import-stream-generics.md` §5 有效验收标准（AC-1~4/7/8；AC-5/6 已随 P2-4 放弃作废）+ §6 风险（R1-R5）
+> 证据三源：测试 Agent 报告（`.devflow/test-report.md` round 1 ALL GREEN + §8 REVIEW 事实链）、研发实现报告（`.devflow/backend-task-report.md`）、产品 Agent 独立实查（源码 + readme + git diff + 实跑 go test）
 > 验收角色：产品 Agent（只读核查，不修改源码）
 
 ---
 
 ## 一、总体判定
 
-**PASS**
+**PASS WITH REVIEW**
 
-- C1–C6 六条全部 **PASS**，0 条 FAIL / REVIEW / BLOCKED。
-- 一项实质偏差（Option 命名：`WithColumnWidths`→`WithColumnWidth`、`WithDataValidation`→`WithDataValidate`）经裁决为 **R4 授权内合法偏差**（能力面/语义零变化，readme 与实现一致，无漂移）。
-- 一项 C4 口径（样板削减超目标上界 66.7%/83.3%）经裁决为 **PASS**（超上界方向 = 削减更多 = 更优，非偏差）。
-- 3 条非失败备注（2 条测试质量小瑕疵 + 1 条 C4 对比表落点偏弱），均为「交付前小修 / 可留后续」，不影响 PASS。
+- 有效 AC 7 条中：**6 条 PASS，1 条 REVIEW（AC-4 的 relation 二档内存门槛未独立实测）**，0 条 FAIL / BLOCKED。
+- AC-5 / AC-6 已随 P2-4（ImportOf[T]）放弃作废，作废裁决链完整（实测证伪 → GATE_ARCH 用户裁决 → PRD 变更记录 → scope 收缩）。
+- 核心价值全部达标并被独立复核：流式结果与全量逐字段等价（含 relation）、skip 正确、break 后句柄零泄漏、既有 31 测试零改动、readme 无漂移、无 relation 内存量级下降（1e5 行 58MB ≈ 全量 3.7%）。
+- 4 条研发偏差均判定为「合法取舍」（见 §四），无一处是「该做没做」或「做了不该做」。
 
-产品对关键事实（R3 覆盖语义、命名冲突、scanner.go 纯空白、既有测试零改动、readme 命名一致、C4 数字）均做了**独立源码/git/实跑核实**，未仅采信研发/测试报告。
-
----
-
-## 二、C1–C6 逐项判定
-
-| 验收 | 标准摘要（PRD §5） | 判定 | 证据 |
-|------|-------------------|------|------|
-| C1 | 三类 Option 配置真实生效（行为级读回） | **PASS** | `TestExportOption_StyleApplies`/`ColumnWidthsApplies`/`DataValidationApplies` 三测试读回 `NumFmt`/`GetColWidth`/`GetDataValidations` 真实断言；产品实读确认非仅调用成功 |
-| C2 | NewSheet 单/多/空边界 | **PASS** | `TestNewSheet_Single`/`Multi`/`EmptyBoundaries` 三测试；`DeepEqual` 锁定行序/列序/值类型，空边界不 panic；产品实读三测试 + 核对 `writeData` 语义一致 |
-| C3 | 22 既有测试零改动回归 | **PASS** | 产品实跑 6 既有测试文件 `git diff` 空 + `git diff --name-only` 仅 7 文件（不含既有测试）+ 实跑 `go test ./...` 31/31 绿 |
-| C4 | 样板削减量化（before/after） | **PASS** | 后端报告对比表：P2-1 66.7%（21→7 行）、P2-2 83.3%（12→2 行），均超目标上界，口径裁决为 PASS（见 §四） |
-| C5 | gofmt / vet / race | **PASS** | 产品实跑 `gofmt -l .` 空、`go vet ./...` exit 0；测试报告 §1 锁定 `-race` 通过；scanner.go diff 纯空白（产品逐 hunk 核实零标识符/字符串/控制流改动） |
-| C6 | readme 新 API 文档化 | **PASS** | readme.md:146-191 含 `NewExporterWithOptions`（三 Option 各一例）+ `NewSheet`（单/多 sheet 两例）；命名与实现签名一致；测试报告 §9 抽取代码块编译通过，无 readme/实现漂移 |
+唯一留用户签字裁决的是 **AC-4 relation 二档门槛**：架构理论上限（≤30%/~113MB）代偿了实测，无 `BenchmarkImportStreamRelation`。两条裁决路径及影响对比见 §三，产品不作裁决。
 
 ---
 
-## 三、命名偏差裁决记录
+## 二、有效 AC 逐项判定
 
-**偏差事实**：PRD §3.1 期望 Option 名为 `WithStyle` / `WithDataValidation` / `WithColumnWidths`。实际落地：
-
-| PRD 期望 | 实际 | 理由 |
-|---------|------|------|
-| `WithStyle` | `WithStyle`（不变） | 既有接口为复数 `WithStyles`，无冲突 |
-| `WithColumnWidths` | `WithColumnWidth`（单数） | 接口 `WithColumnWidths`（excel.go:47）已占用，包内同名会 `redeclared` |
-| `WithDataValidation` | `WithDataValidate`（单数名词） | 接口 `WithDataValidation`（excel.go:51）已占用，取类型名 `DataValidate` 单数 |
-
-**裁决：R4 授权内合法偏差（合法）。** 依据：
-
-1. **冲突真实存在（产品实查）**：`excel.go:47` `type WithColumnWidths interface`、`:51` `type WithDataValidation interface` 确为既有导出接口，Go 包内不可同名，照抄 PRD 名会编译失败。
-2. **PRD R4 显式授权**：「架构阶段若改名（如避免 `WithStyle`/`WithStyles` 混淆），须在偏差记录中说明——PRD 允许等价体验下的签名微调」。
-3. **偏差记录完整**：研发报告「关键偏差」小节 + 测试报告 §6 独立核实，均记录了命名冲突原因与改名映射；`excel.go:83-95` 源码注释也在 `WithDataValidate`/`WithColumnWidth` 上注明「Named ... to avoid colliding with the pre-existing ... interface」。
-4. **体验等价（能力面/语义零变化）**：三 Option 参数类型与 PRD §3.1 表完全一致（`map[string]Style` / `map[string]DataValidate` / `map[string]float64`），仅导出符号名单数/复数之差；C1 行为级读回同样锁定能力对等。产品实读 `excel.go:79/86/93` 确认参数语义零变化。
-5. **readme 与实现一致（无漂移）**：readme.md:151-154 示例用 `WithColumnWidth`/`WithDataValidate` 实际名，测试报告 §9 抽取编译通过，无 readme/实现漂移。
-
-**对 PRD §3 形态条款的处理**：PRD §3.1 表中 `WithDataValidation`/`WithColumnWidths` 两条形态**判定为「R4 授权内合法偏差」**，不改写 PRD、不判 FAIL；以实际落地名为准，验收 C1/C6 均基于实际名通过。
+| AC | 标准摘要（PRD §5） | 判定 | 证据 |
+|----|-------------------|------|------|
+| AC-1 | 流式与全量等价（含 relation） | **PASS** | `TestImportStream_EquivalentToImport` + `_Relation`，两个独立 Importer 走两条路径，`reflect.DeepEqual` 全等；产品实查 R1 复用红线成立（`fillStruct`/`parseCached`/`handleRelation` diff 零出现） |
+| AC-2 | skip 行为正确 | **PASS** | `TestImportStream_Skip`（Skip=1）；产品实读 `reader.go:92-111` `rows()` 前进 `skip+1` 步与 `scanSlice` 的 skip 语义对齐 |
+| AC-3 | break 资源释放无泄漏 | **PASS** | `TestImportStream_BreakReleasesResource` 10 次 break + GC 后 `lsof -p <pid>` 按路径计数为 0；产品实读双层 defer（importer.go:98 `reader.close` + scanner.go:420 `rows.Close`）确定性释放 |
+| AC-4 | 内存对比表（实测峰值） | **PASS（含 REVIEW）** | 无 relation 三档达标（1e5 行 58.37MB ≈ 3.7%，≤10% 门槛），测试报告 §7 独立复跑 + 产品实读 peakMB 口径；**含 relation 二档未独立实测 → REVIEW（§三）** |
+| AC-5 | ImportOf 传错类型编译失败 | **已作废** | P2-4 放弃，PRD §范围变更记录；产品 `grep ImportOf` NOT FOUND（正确缺失） |
+| AC-6 | ImportOf 运行等价 | **已作废** | 同上 |
+| AC-7 | 既有 31 测试零改动回归 | **PASS** | 产品实查 `git diff --stat` 6 文件均非既有测试；冻结文件（column/errors/excel/exporter/go.mod/test/**）diff 零输出；实跑 37/37 绿 |
+| AC-8 | readme 文档化 | **PASS** | readme.md:137-170 示例用真实签名 `ImportStream(&rows)` + `row.(*MyRow)`，偏差说明完整（多 sheet 用 Import / Collection 不触发 / *T 断言 / relation 收益边界），测试报告 §9 抽取代码块编译通过 |
 
 ---
 
-## 四、C4 口径裁决记录
+## 三、REVIEW 专节 — relation 二档内存门槛
 
-**事实**：PRD C4 原文「验证削减落入需求摘要预期区间（P2-1 40–60%、P2-2 50–70%）」。实测：
+### 事实链（产品独立核实，不含裁决）
 
-- P2-1 三配置单表导出：21→7 行 = **66.7%**（超上界 6.7pct）
-- P2-2 纯数据单表导出：12→2 行 = **83.3%**（超上界 13.3pct）
+1. **门槛来源**：架构 §开放点5 设两档——无 relation「峰值 ≤ 全量 10%（~173MB）」、含 relation「峰值 ≤ Relation 基线 378MB 的 30%（~113MB）」。两者均标为「架构理论上限」，非 PRD 硬编码数字。
+2. **无 relation 档已实测闭环**：`BenchmarkImportStream`（benchmark_test.go:82-112）三档产出 peakMB；测试报告 §7 独立复跑 58.37MB ≈ 3.7%，≤173MB 达标。
+3. **含 relation 档未实测**：`benchmark_test.go` 无 `BenchmarkImportStreamRelation`（产品 `grep` NOT FOUND）。注意 relation 夹具 `benBuildRelationXlsx` 与全量基线 `BenchmarkRelation`（benchmark_test.go:256-309）**已存在**，缺失的仅是「流式 relation benchmark」一个函数。
+4. **研发偏差 3 如实记录**：scope T3 `tests` 仅列 no-relation 三档；研发报告自述 relation「未独立实测」，未虚称已测。
+5. **正确性已覆盖**：`TestImportStream_EquivalentToImport_Relation` 证明 relation 字段流式下与全量逐字段等价；`RelationResolver`/`getChildData` 缓存语义在 diff 中零改动（复用）。
 
-**裁决：PASS（超上界 = 更优，不构成偏差）。** 依据：
+### 缺口的影响面（客观判定）
 
-1. 需求本意（PRD §1 目标 + §7 S3）是「样板削减 ≥ 目标区间下限」，即削减「至少达标」；区间上限是预估边界而非硬上限。
-2. 两个样本的偏离方向均为**削减更多**（超上界），而非削减不足（跌破下限）——前者是「比预期更好」，后者才是「未达标」。
-3. 行数口径明确（仅计用户手写样板行，不计库内部），两范式产出同一张 xlsx（行为等价由 C1 测试锁定），口径一致性无争议。
-4. 若严格字面「落入区间内」判超上界为「超出区间」，会得出「做多了反而不过」的反直觉结论，与 P2 优雅性目标相悖。
+- **正确性**：已兜底（`_Relation` 等价测试）。
+- **内存峰值**：无量化。relation 子表预加载是流式收益天然下限（PRD §6 风险 3）——主表 O(N)→O(1)，但子表 O(子表大小) 全量驻留。子表远大于主表时收益收敛。当前无 benchmark 证伪或证实 ~113MB 门槛可达。
+- **影响分级**：不阻断本轮。真实内存痛点主场景是无 relation 数据（1e5 行 1.73GB），该场景已达标且收益最大；relation 场景等价性已兜底，仅「内存上限」这一可观测指标缺实测。
 
-**落点备注（非失败）**：before/after 对比表当前仅存在于 `backend-task-report.md`，未同步进 `readme.md`。PRD C4 原文允许「readme（或验收报告）」承载，后端报告即验收报告范畴，故**算已交付**；若希望用户可见该量化收益，建议在 readme 增一小节对比表（可留后续）。
+### 两条裁决路径（影响对比，用户最终签字时选择）
+
+| 维度 | 路径 a — 接受「理论核算为准」，暂不实测 | 路径 b — 交付前补 `BenchmarkImportStreamRelation` 闭合 |
+|------|--------------------------------------|--------------------------------------------------|
+| **依据** | ① PRD §4.2 的占比论证已给出（架构 §开放点5 机制上限逐项列了子表全量/单行/迭代器三组成）；② relation 正确性已由 `_Relation` 等价测试兜底；③ 真实内存痛点主场景（无 relation）已达标 | 用已有的 `benBuildRelationXlsx` 夹具 + `BenchmarkRelation` 基线，补一个 `BenchmarkImportStreamRelation` 峰值对比，给出实测 ratio 是否 ≤ relation 基线 30% |
+| **成本** | 0 额外工作量，本轮即签收 | 一次性 ~半小时内（夹具与基线已就绪，仅缺流式 benchmark 函数 + 一次 benchmark 跑数） |
+| **残留风险** | 含 relation 的「内存上限」停留在自我宣称，无实验数据；若子表意外巨大时收益收敛程度不可量化 | 消灭该残留，relation 二档从「理论」变「实测」 |
+| **交付节奏** | 本轮可关 | 需多一轮 benchmark 跑数 + 报告更新 |
+| **遗留物** | 若未来 relation 场景成为主战场，需回补实测 | 无 |
+
+**产品的立场（不替用户裁决）**：两条路径都完整成立，本验收在「路径 a」前提下判定 relation 二档不阻断（PASS WITH REVIEW），在「路径 b」前提下属交付前关闭式收尾。产品倾向性提示（非结论）：relation 二档在当前夹具规模（子表 100 行）下，其「主表线性项消除」的机制收益是确定成立的——`BenchmarkRelation` 全量基线 378MB 的主体是主表 1e5 行的全量 `[][]string`，流式消除的正是一块；残留的不确定性仅在于「excelize 迭代器 + 子表预加载」的常数项会否把真实占比推到 30% 以上。补齐成本极低、价值中性偏正，倾向 b；但 a 无硬性阻塞。
 
 ---
 
-## 五、PRD R1–R5 风险逐项回看（以产品实查为准）
+## 四、范围变更合规确认（P2-4 放弃）
+
+**裁决链完整，流程完备**，逐环核查：
+
+| 环节 | 证据 | 产品实查 |
+|------|------|---------|
+| 1. 架构实测证伪 | ADR §开放点4：`~struct{}` 只匹配零字段匿名 struct，最小程序验证 `MyRow missing in ~struct{}`；Go type set 无「any struct」约束 | 文档实存，论证有实测证据非推断 |
+| 2. GATE_ARCH 用户裁决 | PRD §范围变更记录「GATE_ARCH 用户裁决，2026-09-01」 | 权威裁决环节存在 |
+| 3. PRD 变更记录 | PRD 270-272 行：P2-4 放弃、AC-5/6 作废、范围收缩为 P2-3 only | 记录完整，理由（语言不可实现 + 降级零价值）充分 |
+| 4. scope 收缩 | scope.yaml 头部「P2-4 ImportOf 已在 GATE_ARCH 用户裁决放弃」+ task 列表无 import-of | 与 PRD 记录一致 |
+
+**产品确认**：P2-4 放弃是「语言能力受限 + 用户裁决」的结果，非漏实现。`grep ImportOf` NOT FOUND 是正确缺失。AC-5/6 作废合法。
+
+---
+
+## 五、4 条研发偏差合理性核查
+
+| # | 偏差 | 合理性判定 | 依据 |
+|---|------|-----------|------|
+| 1 | 用 `lsof -p <pid>` 替代 `/proc/self/fd` 句柄计数 | **合理** | darwin 无 `/proc/self/fd`，沙箱下 `os.ReadDir("/dev/fd")` 报 `bad file descriptor`；架构 §3 已约定跨平台 fallback；`countFDsForPath` 按路径精确计数（定位具体泄漏源而非 FD 总数 delta），`lsof` 命令本身失败才 `Skipf`，成功路径 `open!=0` 即失败，非恒真跳过 |
+| 2 | relation 等价测试用自建 fixture | **合理** | `test/a.xlsx` 的 `firstSheetName` 回退依赖 sheet 文件内部排序，存在不确定性；自建 `buildStreamRelationXlsx`（主 sheet "Sheet1" + 子 "项配置"）确定性更强，且不触碰冻结夹具（遵守 scope forbidden_files `test/**`） |
+| 3 | relation 二档内存门槛未独立实测 | **已如实记录，属待裁决** | scope T3 `tests` 仅列 no-relation 三档；研发报告未虚称已测，readme/报告说明收益边界。这是本次 REVIEW 的载体项，非隐瞒（见 §三） |
+| 4 | AC-1 夹具用 5 列（而非 8 列） | **合理** | `buildStreamXlsx` 用 `TextColumnRow` 实际映射的 5 个 name 字段，去掉 `benBuildXlsx` 中 col6/7/8 三个未映射列，等价性断言更聚焦；列数不影响 tag 映射语义的正确性验证 |
+
+**结论**：4 条偏差全部成立且理由充分，无违反 scope `forbidden_actions` 之处。
+
+---
+
+## 六、PRD 风险 R1-R5 逐项回看（以产品实查为准）
+
+> PRD R1-R5 全部有效（R4 泛型边界预期随 P2-4 放弃而空转，标注为「随 P2-4 作废」；其余 4 项逐一落地）。
 
 | 风险 | 缓解措施落地核查 | 判定 |
 |------|----------------|------|
-| R1 能力对等 | 三 Option 参数类型与三接口方法返回类型**逐字一致**（`excel.go:79/86/93` vs `:44/48/52`）；C1 以「读回 xlsx 行为等价」断言而非编译通过；`setStyleByMap`/`setColWidthByMap`/`setDataValidationByMap`（exporter.go:132-171）与原 `setXxx` 逐 entry 逻辑一致（产品实读确认） | **已落地 ✓** |
-| R2 NewSheet 接口满足度 | `simpleSheet`（new_sheet.go:12-13）实现 `Headers()`/`Rows()` 满足 `WithHeading`/`FromCollection`；C2 以读回数据断言证明（非类型断言）；「无样式/列宽/验证能力」边界在 new_sheet.go:3-6 注释 + readme.md:162 言明 | **已落地 ✓** |
-| R3 作用范围语义 | `createSheet` 三处（exporter.go:59/69/79）为「sheet 级优先 / 导出级兜底」二选一无歧义，无合并叠加；三条覆盖测试（`TestExportOption_StyleOverride`/`ColumnWidthsOverride`/`DataValidationOverride`）注入与断言常量为**不同值**，方向真实（产品实读确认） | **已落地 ✓** |
-| R4 命名冲突 | 命名偏移经裁决为 R4 授权内合法偏差（见 §三）；偏差记录完整、体验等价、readme 一致 | **已落地 ✓** |
-| R5 gofmt 语义 | scanner.go diff 纯空白（产品逐 hunk 核实：`reader`/`cache` 字段对齐，零标识符/字符串/控制流改动）；`gofmt -l .` 归零 + `go test` 全过作语义锚点 | **已落地 ✓** |
+| R1 双路径语义漂移 | 流式复用 `fillOne`→`fillStruct`→`handleRelation`→`RelationResolver`，仅换数据源（`GetRows`→`file.Rows()` 迭代器）；`git diff -- scanner.go` 仅「抽 fillOne」+「新增 scanStream」两处，`fillStruct`/`parseCached`/`handleRelation` 零出现；配 AC-1 等价测试兜底 | **已落地 ✓** |
+| R2 iter.Seq2 错误传递 | 采用 `Seq2[V,error]` 惯例：表头错/sheet 不存在/无效入参（整体错）与行级 `fillStruct` 错（首个错）均经 error 通道透出并终止迭代；测试报告 §3 确认「首个行级错误透出并终止」；`MultiSheetErrors` 覆盖整体错分支 | **已落地 ✓** |
+| R3 relation 内存占比 | 架构 §开放点5 显式核算子表预加载为下限项；无 relation 场景实测量级下降；有 relation 场景文档说明收益收敛为「主表 O(N)→O(1)+子表 O(子表大小)」；**唯缺实测闭合（→ §三 REVIEW）** | **部分落地（关联 REVIEW）** |
+| R4 泛型/reflect 边界预期 | 随 P2-4 放弃而空转（`ImportOf` 未交付，无「用户误以为泛型提速」的预期错位土壤）；scope/PRD 均已记录放弃理由 | **随 P2-4 作废 ✓** |
+| R5 提前 break 释放时机 | 选定「迭代器内 defer」机制（ADR §开放点1，非 GC/非 AddCleanup），确定性释放（实测 yield=false→return→defer）；AC-3 `lsof` 断言 break 后句柄 0；机制注释 + readme 说明释放语义 | **已落地 ✓** |
 
 ---
 
-## 六、改进建议备注（非失败项处理建议）
+## 七、readme 文档化质量核查（AC-8 深化）
 
-| # | 备注 | 建议 |
-|---|------|------|
-| 1 | C2c nil+nil 断言偏宽松（newsheet_test.go:148，`len` 表达式而非 `DeepEqual`） | **建议交付前小修**：收紧为 `reflect.DeepEqual(rows, [][]string{nil})`，与前两分支一致、锁定精确形状。低风险、一分钟改动。 |
-| 2 | nil+nil 分支注释陈旧（newsheet_test.go:100-102「drops empty sheet / ErrSheetNotExist」与实际「保留 Sheet1 空行」不符） | **可留后续**：仅注释漂移，不影响测试正确性（`:141-142` 已有更正注释）。建议顺手校正顶部概述注释。 |
-| 3 | C4 对比表仅在后端报告、未进 readme | **可留后续**：PRD 允许「验收报告」承载，不 FAIL；若希望用户可见量化收益，可在 readme 增一小节。 |
+| 要求 | 实际落地 | 判定 |
+|------|---------|------|
+| 示例真实签名 | `for row, rerr := range importer.ImportStream(&rows)` + `r := row.(*MyRow)`，与 `ImportStream(e Excel) iter.Seq2[interface{}, error]` 一致 | ✓ |
+| 偏差说明：多 sheet 用 Import | readme.md:168 明示「接到 WithMultipleSheets 返回整体错误，多 sheet 用 Import」 | ✓ |
+| 偏差说明：Collection 不触发 | readme.md:169 明示 | ✓ |
+| 偏差说明：`row.(*MyRow)` 断言 | readme.md:166 明示「yield 的是 *T，需类型断言」 | ✓ |
+| 偏差说明：relation 收益边界 | readme.md:170 明示「子表意外巨大时收益收敛」 | ✓ |
+| 提前 break 释放说明 | readme.md:167 明示「生成器内部 defer 确定性关闭」 | ✓ |
+| 泛型不提升性能提示 | 随 P2-4 放弃不适用（无 ImportOf 可文档化） | —（作废） |
+| 可编译 / 无漂移 | 测试报告 §9 抽取代码块 `go build` 通过 | ✓ |
+
+**结论**：readme 文档化质量达标，无 readme/实现漂移。
 
 ---
 
-## 七、结论
+## 八、结论
 
-- **总体判定：PASS**
-- **C1–C6**：6 / 6 PASS（0 FAIL / REVIEW / BLOCKED）
-- **偏差**：1 项实质命名偏差，裁决为 R4 授权内合法偏差（能力面零变化）
-- **口径**：C4 超上界裁为 PASS（更优方向）
-- **备注**：3 条非失败小瑕疵，建议 #1 交付前小修，#2/#3 可留后续
+- **总体判定：PASS WITH REVIEW**
+- **有效 AC**：6 / 7 PASS（AC-1/2/3/7/8 PASS，AC-4 部分 PASS 含 REVIEW），0 FAIL / BLOCKED；AC-5/6 作废（P2-4 放弃，裁决链完整）。
+- **REVIEW 唯一项**：AC-4 relation 二档内存门槛未独立实测（§三），两条裁决路径（a 理论核算为准 / b 补 benchmark 闭合）已完整呈现影响，用户最终签字时选择；产品倾向路径 b（成本极低、价值中性偏正），但不作裁决、不阻断。
+- **偏差**：4 条研发偏差全部合法（§五），无违反 scope forbidden_actions。
+- **风险**：R1/R2/R5 已落地，R3 部分落地（与 REVIEW 项关联），R4 随 P2-4 作废。
+- **流程**：P2-4 放弃的裁决链合规完备（§四）。
 
-本轮 P2 优雅性（P2-1 导出级 Option + P2-2 NewSheet）+ gofmt 债清理全部实施完成：新增 6 个导出符号（零修改/删除既有符号）、9 个新增测试（行为级读回断言）、现有 22 测试零改动全过、`gofmt -l .`/`go vet`/`go test -race` 全绿、readme 文档化无漂移、R1-R5 五项风险缓解措施均落地。
+本轮 P2-3 ImportStream 流式导入核心价值全部交付并被独立复核：新增 `ImportStream` 单一导出符号（零 breaking），流式复用既有解析内核（R1 红线守住），6 个新增测试（37/37 全绿），既有 31 测试零改动，`gofmt`/`vet`/`-race` 全绿，无 relation 内存量级下降（1e5 行 58MB ≈ 全量 3.7%），readme 文档化无漂移。
+
+---
+
+## 用户裁决记录（2026-09-01，验收后补实测）
+
+针对 AC-4 REVIEW 项（relation 二档门槛）：用户选择**签字 + 补实测**。补测（commit e764eb0）揭示原门槛基线口径错误（378MB 为 B/op 累计值，非峰值），同口径实测全量 relation 峰值仅 ~50-68MB、流式 54MB 持平——relation 场景物理上无内存收益空间（主表 []struct 切片是两路径共有硬下限）。
+
+**用户二次裁决：修订 relation 门槛为"流式峰值 ≈ 全量持平"**（架构文档 §2.5 已留修订记录，含收益边界定界：流式内存收益仅存在于无 relation 主表场景）。
+
+- 修订后 AC-4 判定：**PASS**（无 relation 档 58.37MB ≈ 3.7% 超标达标；relation 档持平达标）
+- **总体判定更新：PASS WITH REVIEW → PASS（有效 AC 全过）**
